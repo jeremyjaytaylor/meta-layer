@@ -21,43 +21,52 @@ interface TaskCardProps {
   task: UnifiedTask;
   onComplete?: (id: string) => void;
   onPromote?: (task: UnifiedTask) => void;
-  onArchive?: (id: string) => void; // <--- NEW PROP
+  onArchive?: (id: string) => void;
 }
 
 export function TaskCard({ task, onComplete, onPromote, onArchive }: TaskCardProps) {
   const Icon = Icons[task.provider];
   const colorClass = Colors[task.provider] || "border-gray-200 bg-white";
 
+  // UPDATED: Now includes Year
+  // Example output: "Nov 26, 2025 • 5:45 PM"
+  const dateObj = new Date(task.createdAt);
+  const dateStr = dateObj.toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' });
+  const timeStr = dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
   return (
-    <div className={`p-4 rounded-lg shadow-sm border-l-4 transition mb-2 flex gap-3 ${colorClass} group`}>
+    <div className={`p-4 rounded-lg shadow-sm border-l-4 transition mb-2 flex gap-3 ${colorClass} group max-w-full`}>
       
       {/* 1. Main Content Area */}
       <div 
-        className="flex-1 cursor-pointer"
+        className="flex-1 cursor-pointer min-w-0"
         onClick={() => window.open(task.url, '_blank')}
       >
         <div className="flex justify-between items-start mb-1">
           <div className="flex items-center gap-2">
-            <Icon size={16} className="text-gray-600" />
-            <span className="text-xs font-bold uppercase text-gray-500 tracking-wider">
+            <Icon size={16} className="text-gray-600 flex-shrink-0" />
+            <span className="text-xs font-bold uppercase text-gray-500 tracking-wider truncate">
               {task.provider}
             </span>
           </div>
-          <span className="text-xs text-gray-400">
-            {new Date(task.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          {/* Timestamp Display */}
+          <span className="text-xs text-gray-400 flex-shrink-0 ml-2 whitespace-nowrap">
+            {dateStr} • {timeStr}
           </span>
         </div>
 
-        <h3 className="font-medium text-gray-800 leading-snug text-sm">{task.title}</h3>
+        <h3 className="font-medium text-gray-800 leading-snug text-sm break-words whitespace-normal">
+          {task.title}
+        </h3>
         
         <div className="mt-2 flex gap-2 flex-wrap">
           {task.metadata.author && (
-            <span className="text-xs bg-white/50 border border-gray-200 px-2 py-1 rounded text-gray-600">
+            <span className="text-xs bg-white/50 border border-gray-200 px-2 py-1 rounded text-gray-600 truncate max-w-[150px]">
               @{task.metadata.author}
             </span>
           )}
            {task.metadata.project && (
-            <span className="text-xs bg-white/50 border border-gray-200 px-2 py-1 rounded text-gray-600">
+            <span className="text-xs bg-white/50 border border-gray-200 px-2 py-1 rounded text-gray-600 truncate max-w-[150px]">
               {task.metadata.project}
             </span>
           )}
@@ -65,7 +74,7 @@ export function TaskCard({ task, onComplete, onPromote, onArchive }: TaskCardPro
       </div>
 
       {/* 2. Action Buttons */}
-      <div className="flex flex-col justify-start gap-2 border-l border-gray-200/50 pl-2 opacity-80 group-hover:opacity-100 transition">
+      <div className="flex flex-col justify-start gap-2 border-l border-gray-200/50 pl-2 opacity-80 group-hover:opacity-100 transition flex-shrink-0">
         
         {/* Asana: Complete */}
         {task.provider === 'asana' && onComplete && (
@@ -89,7 +98,7 @@ export function TaskCard({ task, onComplete, onPromote, onArchive }: TaskCardPro
           </button>
         )}
 
-        {/* Slack: Archive (NEW) */}
+        {/* Slack: Archive */}
         {task.provider === 'slack' && onArchive && (
           <button 
             onClick={(e) => { e.stopPropagation(); onArchive(task.id); }}

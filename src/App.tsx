@@ -4,7 +4,7 @@ import { TaskCard } from "./components/TaskCard";
 import { fetchSlackSignals } from "./adapters/slack";
 import { fetchAsanaTasks, completeAsanaTask, getProjectList, createAsanaTaskWithProject } from "./adapters/asana";
 import { analyzeSignal, batchCategorize, AiSuggestion } from "./adapters/gemini"; 
-import { RefreshCw, LayoutTemplate, Sparkles, X, Check, Inbox } from "lucide-react"; 
+import { RefreshCw, LayoutTemplate, Sparkles, X, Check, Inbox, Filter } from "lucide-react"; 
 import "./App.css";
 
 function App() {
@@ -13,18 +13,23 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [analyzingId, setAnalyzingId] = useState<string | null>(null);
   
-  // Stores "MessageID -> ProjectName" predicted by Gemini
   const [slackProjectMap, setSlackProjectMap] = useState<Record<string, string>>({});
 
-  // Review Queue now needs to track SELECTION
-  // We store the suggestions AND a Set of indices that are "checked"
+  // --- STATE FOR MODALS ---
   const [reviewState, setReviewState] = useState<{ 
     sourceTask: UnifiedTask, 
     suggestions: AiSuggestion[],
     selectedIndices: Set<number> 
   } | null>(null);
 
-  // --- HELPERS: Load/Save Archive ---
+  const [showFilterModal, setShowFilterModal] = useState(false);
+
+  // --- PERSISTENCE: Archived IDs & Blocked Filters ---
+  const [blockedFilters, setBlockedFilters] = useState<string[]>(() => {
+    const stored = localStorage.getItem("meta_blocked_filters");
+    return stored ? JSON.parse(stored) : [];
+  });
+
   const getArchivedIds = (): string[] => {
     const stored = localStorage.getItem("meta_archived_ids");
     return stored ? JSON.parse(stored) : [];
@@ -34,6 +39,11 @@ function App() {
     const current = getArchivedIds();
     localStorage.setItem("meta_archived_ids", JSON.stringify([...current, id]));
   };
+
+  // Save filters whenever they change
+  useEffect(() => {
+    localStorage.setItem("meta_blocked_filters", JSON.stringify(blockedFilters));
+  }, [blockedFilters]);
 
   // --- SYNC ENGINE ---
   const sync = async () => {
@@ -48,7 +58,8 @@ function App() {
     let newSlackTasks: UnifiedTask[] = [];
 
     if (slackData.status === 'fulfilled') {
-      // Filter out archived items immediately
+      // 1. Remove Archived
+      // 2. We do NOT remove Blocked Filters here yet, we do it in render so the list of available filters is accurate
       newSlackTasks = slackData.value.filter(t => !archived.includes(t.id));
       setSlackTasks(newSlackTasks);
     }
@@ -57,9 +68,6 @@ function App() {
       setAsanaTasks(asanaData.value);
     }
 
-    // --- AI BATCH CATEGORIZATION ---
-    // We only run this if we have Slack tasks.
-    // We fetch projects first to give Gemini context.
     if (newSlackTasks.length > 0) {
       console.log("🧠 Batch categorizing Slack messages...");
       const projects = await getProjectList();
@@ -74,20 +82,18 @@ function App() {
 
   useEffect(() => { sync(); }, []);
 
-  // --- HANDLER: Archive Slack ---
+  // --- ACTIONS ---
   const handleArchive = (id: string) => {
-    archiveId(id); // Save to disk
-    setSlackTasks(prev => prev.filter(t => t.id !== id)); // Remove from UI
+    archiveId(id); 
+    setSlackTasks(prev => prev.filter(t => t.id !== id));
   };
 
-  // --- HANDLER: Complete Asana ---
   const handleCompleteTask = async (taskId: string) => {
     setAsanaTasks(currentTasks => currentTasks.filter(t => t.externalId !== taskId));
     const success = await completeAsanaTask(taskId);
     if (!success) sync(); 
   };
 
-  // --- HANDLER: Promote to AI Review ---
   const handleAiPromote = async (task: UnifiedTask) => {
     setAnalyzingId(task.id); 
     const projects = await getProjectList();
@@ -98,25 +104,10 @@ function App() {
       alert("AI couldn't find any tasks.");
       return;
     }
-
-    // Initialize modal with ALL items selected by default
     const allIndices = new Set(suggestions.map((_, i) => i));
     setReviewState({ sourceTask: task, suggestions, selectedIndices: allIndices });
   };
 
-  // --- HANDLER: Toggle Checkbox in Modal ---
-  const toggleSuggestion = (index: number) => {
-    if (!reviewState) return;
-    const newSet = new Set(reviewState.selectedIndices);
-    if (newSet.has(index)) {
-      newSet.delete(index);
-    } else {
-      newSet.add(index);
-    }
-    setReviewState({ ...reviewState, selectedIndices: newSet });
-  };
-
-  // --- HANDLER: Final Approve ---
   const handleApproveSuggestions = async () => {
     if (!reviewState) return;
     const { sourceTask, suggestions, selectedIndices } = reviewState;
@@ -124,7 +115,6 @@ function App() {
     setLoading(true);
 
     let createdCount = 0;
-    // Only create items that are in the selectedIndices set
     const tasksToCreate = suggestions.filter((_, i) => selectedIndices.has(i));
 
     for (const item of tasksToCreate) {
@@ -137,20 +127,47 @@ function App() {
     }
 
     if (createdCount > 0) {
-      handleArchive(sourceTask.id); // Auto-archive the signal after processing!
+      handleArchive(sourceTask.id); 
       const newAsanaTasks = await fetchAsanaTasks();
       setAsanaTasks(newAsanaTasks);
     }
     setLoading(false);
   };
 
-  // --- GROUPING HELPER (The UI Logic) ---
+  // --- FILTER LOGIC ---
+  const toggleFilter = (filterKey: string) => {
+    setBlockedFilters(prev => 
+      prev.includes(filterKey) ? prev.filter(f => f !== filterKey) : [...prev, filterKey]
+    );
+  };
+
+  // Get unique channels and authors from the CURRENT Slack list (for the modal)
+  const availableFilters = useMemo(() => {
+    const channels = new Set<string>();
+    const authors = new Set<string>();
+    slackTasks.forEach(t => {
+      if (t.metadata.channel) channels.add(t.metadata.channel);
+      if (t.metadata.author) authors.add(t.metadata.author);
+    });
+    return { 
+      channels: Array.from(channels).sort(), 
+      authors: Array.from(authors).sort() 
+    };
+  }, [slackTasks]);
+
+  // Actually filter the displayed list
+  const visibleSlackTasks = slackTasks.filter(t => {
+    const channelKey = `channel:${t.metadata.channel}`;
+    const authorKey = `author:${t.metadata.author}`;
+    return !blockedFilters.includes(channelKey) && !blockedFilters.includes(authorKey);
+  });
+
+  // --- GROUPING HELPER ---
   const renderGroupedList = (
     tasks: UnifiedTask[], 
     getProject: (t: UnifiedTask) => string, 
     renderAction: (t: UnifiedTask) => React.ReactNode
   ) => {
-    // 1. Group items
     const groups: Record<string, UnifiedTask[]> = {};
     tasks.forEach(t => {
       const p = getProject(t) || "Inbox";
@@ -158,12 +175,6 @@ function App() {
       groups[p].push(t);
     });
 
-    // 2. Sort items within groups (newest first)
-    Object.keys(groups).forEach(key => {
-        groups[key].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-    });
-
-    // 3. Render
     return Object.keys(groups).sort().map(project => (
       <div key={project} className="mb-6">
         <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 flex items-center gap-2">
@@ -188,24 +199,36 @@ function App() {
                 <p className="text-sm text-gray-500 font-medium">Unified Command Center</p>
             </div>
         </div>
-        <button onClick={sync} className="flex items-center gap-2 bg-white border border-gray-200 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-50 transition shadow-sm font-medium text-sm">
-          <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
-          Sync
-        </button>
+        
+        <div className="flex gap-2">
+          {/* FILTER BUTTON */}
+          <button 
+            onClick={() => setShowFilterModal(true)}
+            className={`flex items-center gap-2 border px-3 py-2 rounded-lg transition shadow-sm font-medium text-sm ${blockedFilters.length > 0 ? 'bg-purple-50 border-purple-200 text-purple-700' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+          >
+            <Filter size={16} />
+            Filters {blockedFilters.length > 0 && `(${blockedFilters.length})`}
+          </button>
+
+          {/* SYNC BUTTON */}
+          <button onClick={sync} className="flex items-center gap-2 bg-white border border-gray-200 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-50 transition shadow-sm font-medium text-sm">
+            <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
+            Sync
+          </button>
+        </div>
       </div>
 
       <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-8">
         
-        {/* LEFT COLUMN: Slack (Grouped by AI Prediction) */}
+        {/* LEFT COLUMN: Slack (Filtered & Grouped) */}
         <div className="flex flex-col gap-4">
           <h2 className="text-sm font-bold text-gray-500 uppercase tracking-wider flex items-center gap-2">
             Incoming Signals
-            <span className="bg-purple-100 text-purple-700 text-xs px-2 py-0.5 rounded-full">{slackTasks.length}</span>
+            <span className="bg-purple-100 text-purple-700 text-xs px-2 py-0.5 rounded-full">{visibleSlackTasks.length}</span>
           </h2>
           
           {renderGroupedList(
-            slackTasks,
-            // Project Getter: Use AI map, fallback to Channel name
+            visibleSlackTasks,
             (t) => slackProjectMap[t.id] || `#${t.metadata.channel}` || "Uncategorized",
             (t) => (
               <div key={t.id} className="relative">
@@ -220,7 +243,7 @@ function App() {
           )}
         </div>
 
-        {/* RIGHT COLUMN: Asana (Grouped by Project) */}
+        {/* RIGHT COLUMN: Asana */}
         <div className="flex flex-col gap-4">
           <h2 className="text-sm font-bold text-gray-500 uppercase tracking-wider flex items-center gap-2">
             Action Items
@@ -229,17 +252,17 @@ function App() {
           
           {renderGroupedList(
             asanaTasks,
-            // Project Getter: Use Asana Metadata
             (t) => t.metadata.project || "My Tasks",
             (t) => <TaskCard key={t.id} task={t} onComplete={handleCompleteTask} />
           )}
         </div>
       </div>
 
-      {/* --- REVIEW MODAL WITH CHECKBOXES --- */}
+      {/* --- REVIEW MODAL --- */}
       {reviewState && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden animate-in fade-in zoom-in duration-200">
+            {/* ... Same Review Modal UI as before ... */}
             <div className="bg-purple-600 p-6 text-white flex justify-between items-start">
               <div>
                 <h3 className="text-xl font-bold flex items-center gap-2"><Sparkles size={20} className="text-purple-200" /> AI Suggested Actions</h3>
@@ -254,14 +277,16 @@ function App() {
                 return (
                   <div 
                     key={idx} 
-                    onClick={() => toggleSuggestion(idx)}
+                    onClick={() => {
+                        const newSet = new Set(reviewState.selectedIndices);
+                        isSelected ? newSet.delete(idx) : newSet.add(idx);
+                        setReviewState({ ...reviewState, selectedIndices: newSet });
+                    }}
                     className={`p-4 rounded-xl border cursor-pointer transition flex gap-3 items-start ${isSelected ? 'bg-white border-purple-300 ring-1 ring-purple-100' : 'bg-gray-100 border-transparent opacity-60'}`}
                   >
-                    {/* Checkbox UI */}
                     <div className={`mt-1 w-5 h-5 rounded border flex items-center justify-center transition-colors ${isSelected ? 'bg-purple-600 border-purple-600 text-white' : 'bg-white border-gray-300'}`}>
                       {isSelected && <Check size={12} />}
                     </div>
-                    
                     <div>
                       <h4 className={`font-bold ${isSelected ? 'text-gray-900' : 'text-gray-500'}`}>{item.title}</h4>
                       <div className="flex items-center gap-2 mt-2">
@@ -285,6 +310,65 @@ function App() {
           </div>
         </div>
       )}
+
+      {/* --- FILTER MODAL (NEW) --- */}
+      {showFilterModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden animate-in fade-in zoom-in duration-200">
+            <div className="bg-white p-6 border-b border-gray-100 flex justify-between items-center">
+              <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                <Filter size={20} /> Signal Filters
+              </h3>
+              <button onClick={() => setShowFilterModal(false)} className="text-gray-400 hover:text-gray-600"><X size={24} /></button>
+            </div>
+            
+            <div className="p-6 max-h-[60vh] overflow-y-auto">
+              <div className="mb-6">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-3">Channels</h4>
+                <div className="space-y-2">
+                  {availableFilters.channels.map(channel => {
+                    const key = `channel:${channel}`;
+                    const isBlocked = blockedFilters.includes(key);
+                    return (
+                      <label key={key} className="flex items-center justify-between p-3 rounded-lg border border-gray-100 hover:bg-gray-50 cursor-pointer">
+                        <span className="font-medium text-gray-700">#{channel}</span>
+                        <input 
+                          type="checkbox" 
+                          checked={!isBlocked}
+                          onChange={() => toggleFilter(key)}
+                          className="w-5 h-5 rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+                        />
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <h4 className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-3">Authors</h4>
+                <div className="space-y-2">
+                  {availableFilters.authors.map(author => {
+                    const key = `author:${author}`;
+                    const isBlocked = blockedFilters.includes(key);
+                    return (
+                      <label key={key} className="flex items-center justify-between p-3 rounded-lg border border-gray-100 hover:bg-gray-50 cursor-pointer">
+                        <span className="font-medium text-gray-700">@{author}</span>
+                        <input 
+                          type="checkbox" 
+                          checked={!isBlocked}
+                          onChange={() => toggleFilter(key)}
+                          className="w-5 h-5 rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+                        />
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

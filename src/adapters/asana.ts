@@ -2,7 +2,7 @@ import { fetch } from '@tauri-apps/plugin-http';
 import { UnifiedTask } from '../types/unified';
 import { v4 as uuidv4 } from 'uuid';
 
-// ⚠️ PASTE YOUR REAL TOKEN HERE
+// ⚠️ PASTE YOUR ASANA TOKEN HERE
 const ASANA_TOKEN = "2/1123680875093244/1212199707443892:fba96ce0086234d19fe9719600931f18"; 
 
 // Helper: Get Workspace ID
@@ -22,13 +22,14 @@ async function getWorkspaceId(): Promise<string | null> {
   }
 }
 
+// ---------------------------------------------------------
 // READ: Fetch My Tasks
+// ---------------------------------------------------------
 export async function fetchAsanaTasks(): Promise<UnifiedTask[]> {
   try {
     const workspaceId = await getWorkspaceId();
     if (!workspaceId) return [];
 
-    // FIX 1: Added "created_at" to opt_fields
     const response = await fetch(
       `https://app.asana.com/api/1.0/tasks?assignee=me&workspace=${workspaceId}&completed_since=now&opt_fields=name,permalink_url,due_on,projects.name,assignee_status,created_at`, 
       {
@@ -41,13 +42,14 @@ export async function fetchAsanaTasks(): Promise<UnifiedTask[]> {
     if (!data.data) return [];
 
     return data.data.map((task: any) => ({
-      id: uuidv4(),
+      // STABLE ID FIX: 
+      // We use the Asana GID. We prefix 'asana-' to avoid collisions with other tools.
+      id: `asana-${task.gid}`, 
       externalId: task.gid, 
       provider: 'asana',
       title: task.name,
       url: task.permalink_url,
       status: task.assignee_status === 'today' ? 'todo' : 'in_progress',
-      // FIX 2: Use the real Asana timestamp, fallback to now if missing
       createdAt: task.created_at || new Date().toISOString(),
       metadata: {
         project: task.projects.length > 0 ? task.projects[0].name : 'My Tasks',
@@ -61,7 +63,9 @@ export async function fetchAsanaTasks(): Promise<UnifiedTask[]> {
   }
 }
 
+// ---------------------------------------------------------
 // WRITE: Mark as Complete
+// ---------------------------------------------------------
 export async function completeAsanaTask(taskId: string): Promise<boolean> {
   try {
     console.log(`✅ Attempting to complete task: ${taskId}`);
@@ -79,54 +83,20 @@ export async function completeAsanaTask(taskId: string): Promise<boolean> {
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error("❌ Asana Failure Code:", response.status);
       console.error("❌ Asana Failure Details:", errorText);
       return false;
     }
     
-    console.log("🎉 Asana Success! Task completed.");
     return true;
-
   } catch (error) {
     console.error("💥 Network/Logic Error:", error);
     return false;
   }
 }
 
-// WRITE: Create Task from Slack
-export async function createAsanaTaskFromSlack(text: string, slackLink: string): Promise<boolean> {
-  try {
-    const workspaceId = await getWorkspaceId();
-    if (!workspaceId) return false;
-
-    console.log(`🚀 Promoting Slack to Asana: ${text}`);
-    
-    const response = await fetch(`https://app.asana.com/api/1.0/tasks`, {
-      method: 'POST',
-      headers: { 
-        'Authorization': `Bearer ${ASANA_TOKEN}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ 
-        data: { 
-          workspace: workspaceId,
-          name: `From Slack: ${text}`,
-          notes: `Context: ${slackLink}`,
-          assignee: 'me'
-        } 
-      })
-    });
-    
-    return response.ok;
-  } catch (error) {
-    console.error("Failed to create task:", error);
-    return false;
-  }
-}
-
-// ... existing code ...
-
-// NEW: Fetch all project names to feed the AI
+// ---------------------------------------------------------
+// AI HELPER: Get Project List
+// ---------------------------------------------------------
 export async function getProjectList(): Promise<string[]> {
   try {
     const workspaceId = await getWorkspaceId();
@@ -146,26 +116,25 @@ export async function getProjectList(): Promise<string[]> {
     return data.data.map((p: any) => p.name);
   } catch (error) {
     console.error("Failed to fetch projects:", error);
-    // Fallback list if API fails
-    return ["My Tasks", "Engineering", "Design", "Marketing"]; 
+    return ["My Tasks"]; 
   }
 }
 
-// UPDATE: Create Task (Modified to accept a Project Name)
+// ---------------------------------------------------------
+// WRITE: Create Task (With Project Support)
+// ---------------------------------------------------------
 export async function createAsanaTaskWithProject(title: string, projectName: string, notes: string): Promise<boolean> {
   try {
     const workspaceId = await getWorkspaceId();
     if (!workspaceId) return false;
 
-    // 1. We need the Project ID, not the name. 
-    // In a real app, we'd cache this map. For now, we fetch projects to find the ID.
+    // Fetch projects to find the ID matching the name
     const projectsResponse = await fetch(
       `https://app.asana.com/api/1.0/projects?workspace=${workspaceId}&archived=false&opt_fields=name,gid`, 
       { headers: { 'Authorization': `Bearer ${ASANA_TOKEN}` } }
     );
     const projectsData = await projectsResponse.json() as any;
     
-    // Find ID matching the name Gemini suggested
     const project = projectsData.data.find((p: any) => p.name === projectName);
     const projectId = project ? project.gid : null;
 
@@ -176,12 +145,9 @@ export async function createAsanaTaskWithProject(title: string, projectName: str
       assignee: 'me'
     };
 
-    // If we found a project ID, add it to the payload
     if (projectId) {
       body.projects = [projectId];
     }
-
-    console.log(`🚀 creating task "${title}" in project "${projectName}"`);
 
     const response = await fetch(`https://app.asana.com/api/1.0/tasks`, {
       method: 'POST',
