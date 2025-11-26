@@ -1,5 +1,5 @@
 import { UnifiedTask } from "../types/unified";
-import { MessageSquare, CheckSquare, Github, FileText, HardDrive, Check, ArrowRight } from "lucide-react";
+import { MessageSquare, CheckSquare, Github, FileText, HardDrive, Check, ArrowRight, Archive } from "lucide-react";
 
 const Icons = {
   slack: MessageSquare,
@@ -21,16 +21,17 @@ interface TaskCardProps {
   task: UnifiedTask;
   onComplete?: (id: string) => void;
   onPromote?: (task: UnifiedTask) => void;
+  onArchive?: (id: string) => void; // <--- NEW PROP
 }
 
-export function TaskCard({ task, onComplete, onPromote }: TaskCardProps) {
+export function TaskCard({ task, onComplete, onPromote, onArchive }: TaskCardProps) {
   const Icon = Icons[task.provider];
   const colorClass = Colors[task.provider] || "border-gray-200 bg-white";
 
   return (
-    <div className={`p-4 rounded-lg shadow-sm border-l-4 transition mb-3 flex gap-3 ${colorClass}`}>
+    <div className={`p-4 rounded-lg shadow-sm border-l-4 transition mb-2 flex gap-3 ${colorClass} group`}>
       
-      {/* 1. Main Content Area (Clickable) */}
+      {/* 1. Main Content Area */}
       <div 
         className="flex-1 cursor-pointer"
         onClick={() => window.open(task.url, '_blank')}
@@ -47,7 +48,7 @@ export function TaskCard({ task, onComplete, onPromote }: TaskCardProps) {
           </span>
         </div>
 
-        <h3 className="font-medium text-gray-800 leading-snug">{task.title}</h3>
+        <h3 className="font-medium text-gray-800 leading-snug text-sm">{task.title}</h3>
         
         <div className="mt-2 flex gap-2 flex-wrap">
           {task.metadata.author && (
@@ -64,38 +65,38 @@ export function TaskCard({ task, onComplete, onPromote }: TaskCardProps) {
       </div>
 
       {/* 2. Action Buttons */}
-      <div className="flex flex-col justify-center gap-2 border-l border-gray-200/50 pl-2">
+      <div className="flex flex-col justify-start gap-2 border-l border-gray-200/50 pl-2 opacity-80 group-hover:opacity-100 transition">
         
-        {/* ACTION: Complete Asana Task */}
+        {/* Asana: Complete */}
         {task.provider === 'asana' && onComplete && (
           <button 
-            onClick={(e) => {
-              e.stopPropagation();
-              // THE FIX: Ensure we send externalId
-              if (task.externalId) {
-                  onComplete(task.externalId);
-              } else {
-                  console.error("Missing externalId for task:", task);
-              }
-            }}
-            className="p-2 bg-white rounded hover:bg-green-100 text-gray-400 hover:text-green-600 transition border border-gray-200"
+            onClick={(e) => { e.stopPropagation(); if (task.externalId) onComplete(task.externalId); }}
+            className="p-1.5 bg-white rounded hover:bg-green-100 text-gray-400 hover:text-green-600 transition border border-gray-200"
             title="Mark Complete"
           >
-            <Check size={18} />
+            <Check size={16} />
           </button>
         )}
 
-        {/* ACTION: Promote Slack to Asana */}
+        {/* Slack: Promote */}
         {task.provider === 'slack' && onPromote && (
           <button 
-            onClick={(e) => {
-              e.stopPropagation();
-              onPromote(task);
-            }}
-            className="p-2 bg-white rounded hover:bg-blue-100 text-gray-400 hover:text-blue-600 transition border border-gray-200"
+            onClick={(e) => { e.stopPropagation(); onPromote(task); }}
+            className="p-1.5 bg-white rounded hover:bg-blue-100 text-gray-400 hover:text-blue-600 transition border border-gray-200"
             title="Turn into Task"
           >
-            <ArrowRight size={18} />
+            <ArrowRight size={16} />
+          </button>
+        )}
+
+        {/* Slack: Archive (NEW) */}
+        {task.provider === 'slack' && onArchive && (
+          <button 
+            onClick={(e) => { e.stopPropagation(); onArchive(task.id); }}
+            className="p-1.5 bg-white rounded hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition border border-gray-200"
+            title="Archive Signal"
+          >
+            <Archive size={16} />
           </button>
         )}
       </div>
