@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { UnifiedTask } from "./types/unified";
 import { TaskCard } from "./components/TaskCard";
 import { fetchSlackSignals } from "./adapters/slack";
-import { fetchAsanaTasks, completeAsanaTask, createAsanaTaskFromSlack } from "./adapters/asana"; // <--- Import Actions
+import { fetchAsanaTasks, completeAsanaTask, createAsanaTaskFromSlack } from "./adapters/asana";
 import { RefreshCw, LayoutTemplate } from "lucide-react";
 import "./App.css";
 
@@ -25,33 +25,35 @@ function App() {
 
   useEffect(() => { sync(); }, []);
 
-  // --- HANDLER 1: Mark Complete ---
+  // --- HANDLER 1: Mark Complete (Optimistic UI) ---
   const handleCompleteTask = async (taskId: string) => {
-    // 1. Optimistic UI: Remove it from screen immediately
-    setAsanaTasks(prev => prev.filter(t => t.id !== taskId));
+    // 1. INSTANTLY remove the task from the screen
+    setAsanaTasks(currentTasks => currentTasks.filter(t => t.externalId !== taskId));
 
-    // 2. Call API in background
+    // 2. Then call the API in the background
     const success = await completeAsanaTask(taskId);
+    
+    // 3. If it failed, we should re-sync to show it again
     if (!success) {
-      alert("Failed to complete task. Syncing to reset.");
-      sync(); // Revert on failure
+      console.error("Task completion failed, restoring...");
+      sync(); 
     }
   };
 
   // --- HANDLER 2: Promote Slack to Asana ---
   const handlePromoteSignal = async (task: UnifiedTask) => {
-    // 1. Optimistic UI: Remove from Slack list? (Optional, maybe keep it until next sync)
-    // For now, let's just trigger the creation.
-    
-    // 2. Call API
+    // 1. Call API
     const success = await createAsanaTaskFromSlack(task.title, task.url);
     
     if (success) {
-      // 3. Refresh Asana list to show the new item
+      // 2. Refresh Asana to show the new task
       const newAsanaTasks = await fetchAsanaTasks();
       setAsanaTasks(newAsanaTasks);
+      
+      // 3. Scroll to top so the user sees the new item
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     } else {
-      alert("Failed to create task in Asana");
+      alert("Failed to promote task.");
     }
   };
 
@@ -75,7 +77,7 @@ function App() {
 
       <div className="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-8">
         
-        {/* LEFT COLUMN: Slack (Promote) */}
+        {/* LEFT COLUMN: Slack */}
         <div className="flex flex-col gap-4">
           <h2 className="text-sm font-bold text-gray-500 uppercase tracking-wider flex items-center gap-2">
             Incoming Signals
@@ -86,26 +88,30 @@ function App() {
               <TaskCard 
                 key={t.id} 
                 task={t} 
-                onPromote={handlePromoteSignal} // <--- Pass the Handler
+                onPromote={handlePromoteSignal}
               />
             ))}
           </div>
         </div>
 
-        {/* RIGHT COLUMN: Asana (Complete) */}
+        {/* RIGHT COLUMN: Asana */}
         <div className="flex flex-col gap-4">
           <h2 className="text-sm font-bold text-gray-500 uppercase tracking-wider flex items-center gap-2">
             Action Items
             <span className="bg-red-100 text-red-700 text-xs px-2 py-0.5 rounded-full">{asanaTasks.length}</span>
           </h2>
            <div className="space-y-1">
-            {asanaTasks.map(t => (
-              <TaskCard 
-                key={t.id} 
-                task={t} 
-                onComplete={handleCompleteTask} // <--- Pass the Handler
-              />
-            ))}
+            {asanaTasks
+              // SORT LOGIC: Newest items (by creation date) go to the top
+              .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+              .map(t => (
+                <TaskCard 
+                  key={t.id} 
+                  task={t} 
+                  onComplete={handleCompleteTask}
+                />
+              ))
+            }
           </div>
         </div>
 

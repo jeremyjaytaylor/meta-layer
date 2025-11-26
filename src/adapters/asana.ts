@@ -28,8 +28,9 @@ export async function fetchAsanaTasks(): Promise<UnifiedTask[]> {
     const workspaceId = await getWorkspaceId();
     if (!workspaceId) return [];
 
+    // FIX 1: Added "created_at" to opt_fields
     const response = await fetch(
-      `https://app.asana.com/api/1.0/tasks?assignee=me&workspace=${workspaceId}&completed_since=now&opt_fields=name,permalink_url,due_on,projects.name,assignee_status`, 
+      `https://app.asana.com/api/1.0/tasks?assignee=me&workspace=${workspaceId}&completed_since=now&opt_fields=name,permalink_url,due_on,projects.name,assignee_status,created_at`, 
       {
         method: 'GET',
         headers: { 'Authorization': `Bearer ${ASANA_TOKEN}` }
@@ -46,7 +47,8 @@ export async function fetchAsanaTasks(): Promise<UnifiedTask[]> {
       title: task.name,
       url: task.permalink_url,
       status: task.assignee_status === 'today' ? 'todo' : 'in_progress',
-      createdAt: new Date().toISOString(),
+      // FIX 2: Use the real Asana timestamp, fallback to now if missing
+      createdAt: task.created_at || new Date().toISOString(),
       metadata: {
         project: task.projects.length > 0 ? task.projects[0].name : 'My Tasks',
         due: task.due_on
@@ -70,7 +72,6 @@ export async function completeAsanaTask(taskId: string): Promise<boolean> {
         'Authorization': `Bearer ${ASANA_TOKEN}`,
         'Content-Type': 'application/json'
       },
-      // FIX: Wrapped in "data" object
       body: JSON.stringify({ 
         data: { completed: true } 
       })
@@ -106,7 +107,6 @@ export async function createAsanaTaskFromSlack(text: string, slackLink: string):
         'Authorization': `Bearer ${ASANA_TOKEN}`,
         'Content-Type': 'application/json'
       },
-      // FIX: Wrapped in "data" object
       body: JSON.stringify({ 
         data: { 
           workspace: workspaceId,
