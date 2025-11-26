@@ -123,3 +123,78 @@ export async function createAsanaTaskFromSlack(text: string, slackLink: string):
     return false;
   }
 }
+
+// ... existing code ...
+
+// NEW: Fetch all project names to feed the AI
+export async function getProjectList(): Promise<string[]> {
+  try {
+    const workspaceId = await getWorkspaceId();
+    if (!workspaceId) return [];
+
+    const response = await fetch(
+      `https://app.asana.com/api/1.0/projects?workspace=${workspaceId}&archived=false&opt_fields=name`, 
+      {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${ASANA_TOKEN}` }
+      }
+    );
+
+    const data = await response.json() as any;
+    if (!data.data) return [];
+
+    return data.data.map((p: any) => p.name);
+  } catch (error) {
+    console.error("Failed to fetch projects:", error);
+    // Fallback list if API fails
+    return ["My Tasks", "Engineering", "Design", "Marketing"]; 
+  }
+}
+
+// UPDATE: Create Task (Modified to accept a Project Name)
+export async function createAsanaTaskWithProject(title: string, projectName: string, notes: string): Promise<boolean> {
+  try {
+    const workspaceId = await getWorkspaceId();
+    if (!workspaceId) return false;
+
+    // 1. We need the Project ID, not the name. 
+    // In a real app, we'd cache this map. For now, we fetch projects to find the ID.
+    const projectsResponse = await fetch(
+      `https://app.asana.com/api/1.0/projects?workspace=${workspaceId}&archived=false&opt_fields=name,gid`, 
+      { headers: { 'Authorization': `Bearer ${ASANA_TOKEN}` } }
+    );
+    const projectsData = await projectsResponse.json() as any;
+    
+    // Find ID matching the name Gemini suggested
+    const project = projectsData.data.find((p: any) => p.name === projectName);
+    const projectId = project ? project.gid : null;
+
+    const body: any = {
+      workspace: workspaceId,
+      name: title,
+      notes: notes,
+      assignee: 'me'
+    };
+
+    // If we found a project ID, add it to the payload
+    if (projectId) {
+      body.projects = [projectId];
+    }
+
+    console.log(`🚀 creating task "${title}" in project "${projectName}"`);
+
+    const response = await fetch(`https://app.asana.com/api/1.0/tasks`, {
+      method: 'POST',
+      headers: { 
+        'Authorization': `Bearer ${ASANA_TOKEN}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ data: body })
+    });
+    
+    return response.ok;
+  } catch (error) {
+    console.error("Failed to create task:", error);
+    return false;
+  }
+}

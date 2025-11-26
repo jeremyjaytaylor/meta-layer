@@ -2,14 +2,19 @@ import { useState, useEffect } from "react";
 import { UnifiedTask } from "./types/unified";
 import { TaskCard } from "./components/TaskCard";
 import { fetchSlackSignals } from "./adapters/slack";
-import { fetchAsanaTasks, completeAsanaTask, createAsanaTaskFromSlack } from "./adapters/asana";
-import { RefreshCw, LayoutTemplate } from "lucide-react";
+import { fetchAsanaTasks, completeAsanaTask, getProjectList, createAsanaTaskWithProject } from "./adapters/asana";
+import { analyzeSignal, AiSuggestion } from "./adapters/gemini"; 
+import { RefreshCw, LayoutTemplate, Sparkles, X, Check } from "lucide-react"; 
 import "./App.css";
 
 function App() {
   const [slackTasks, setSlackTasks] = useState<UnifiedTask[]>([]);
   const [asanaTasks, setAsanaTasks] = useState<UnifiedTask[]>([]);
   const [loading, setLoading] = useState(false);
+  const [analyzingId, setAnalyzingId] = useState<string | null>(null);
+  
+  // NEW: State to hold AI suggestions for review
+  const [reviewQueue, setReviewQueue] = useState<{ sourceTask: UnifiedTask, suggestions: AiSuggestion[] } | null>(null);
 
   const sync = async () => {
     setLoading(true);
@@ -25,40 +30,63 @@ function App() {
 
   useEffect(() => { sync(); }, []);
 
-  // --- HANDLER 1: Mark Complete (Optimistic UI) ---
   const handleCompleteTask = async (taskId: string) => {
-    // 1. INSTANTLY remove the task from the screen
     setAsanaTasks(currentTasks => currentTasks.filter(t => t.externalId !== taskId));
-
-    // 2. Then call the API in the background
     const success = await completeAsanaTask(taskId);
-    
-    // 3. If it failed, we should re-sync to show it again
-    if (!success) {
-      console.error("Task completion failed, restoring...");
-      sync(); 
-    }
+    if (!success) sync(); 
   };
 
-  // --- HANDLER 2: Promote Slack to Asana ---
-  const handlePromoteSignal = async (task: UnifiedTask) => {
-    // 1. Call API
-    const success = await createAsanaTaskFromSlack(task.title, task.url);
+  // --- STEP 1: AI Analysis ---
+  const handleAiPromote = async (task: UnifiedTask) => {
+    setAnalyzingId(task.id); 
+    const projects = await getProjectList();
     
-    if (success) {
-      // 2. Refresh Asana to show the new task
+    console.log("🧠 Sending to AI...");
+    const suggestions = await analyzeSignal(task.title, projects);
+    
+    setAnalyzingId(null);
+
+    if (suggestions.length === 0) {
+      alert("AI couldn't find any clear tasks."); // Fallback alert
+      return;
+    }
+
+    // Instead of confirm(), we open the Modal
+    setReviewQueue({ sourceTask: task, suggestions });
+  };
+
+  // --- STEP 2: Execute Approved Tasks ---
+  const handleApproveSuggestions = async () => {
+    if (!reviewQueue) return;
+
+    const { sourceTask, suggestions } = reviewQueue;
+    
+    // Optimistically close modal
+    setReviewQueue(null); 
+    setLoading(true);
+
+    let createdCount = 0;
+    for (const item of suggestions) {
+      await createAsanaTaskWithProject(
+        item.title, 
+        item.projectName, 
+        `Original Context: ${sourceTask.url}\n\nAI Reasoning: ${item.reasoning}`
+      );
+      createdCount++;
+    }
+
+    if (createdCount > 0) {
       const newAsanaTasks = await fetchAsanaTasks();
       setAsanaTasks(newAsanaTasks);
-      
-      // 3. Scroll to top so the user sees the new item
       window.scrollTo({ top: 0, behavior: 'smooth' });
-    } else {
-      alert("Failed to promote task.");
     }
+    setLoading(false);
   };
 
   return (
-    <div className="min-h-screen p-8 text-gray-900 font-sans bg-gray-50">
+    <div className="min-h-screen p-8 text-gray-900 font-sans bg-gray-50 relative">
+      
+      {/* --- HEADER --- */}
       <div className="max-w-6xl mx-auto flex justify-between items-center mb-8">
         <div className="flex items-center gap-3">
             <div className="p-2 bg-black rounded-lg">
@@ -75,6 +103,7 @@ function App() {
         </button>
       </div>
 
+      {/* --- MAIN GRID --- */}
       <div className="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-8">
         
         {/* LEFT COLUMN: Slack */}
@@ -85,11 +114,20 @@ function App() {
           </h2>
           <div className="space-y-1">
             {slackTasks.map(t => (
-              <TaskCard 
-                key={t.id} 
-                task={t} 
-                onPromote={handlePromoteSignal}
-              />
+              <div key={t.id} className="relative">
+                <TaskCard 
+                  task={t} 
+                  onPromote={handleAiPromote} 
+                />
+                {analyzingId === t.id && (
+                  <div className="absolute inset-0 bg-white/90 flex items-center justify-center rounded-lg z-10 backdrop-blur-sm border border-purple-200">
+                    <div className="flex items-center gap-2 text-purple-700 font-bold animate-pulse">
+                      <Sparkles size={20} />
+                      Analyzing...
+                    </div>
+                  </div>
+                )}
+              </div>
             ))}
           </div>
         </div>
@@ -102,7 +140,6 @@ function App() {
           </h2>
            <div className="space-y-1">
             {asanaTasks
-              // SORT LOGIC: Newest items (by creation date) go to the top
               .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
               .map(t => (
                 <TaskCard 
@@ -114,8 +151,71 @@ function App() {
             }
           </div>
         </div>
-
       </div>
+
+      {/* --- REVIEW MODAL (The New UI) --- */}
+      {reviewQueue && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden animate-in fade-in zoom-in duration-200">
+            
+            {/* Modal Header */}
+            <div className="bg-purple-600 p-6 text-white flex justify-between items-start">
+              <div>
+                <h3 className="text-xl font-bold flex items-center gap-2">
+                  <Sparkles size={20} className="text-purple-200" />
+                  AI Suggested Actions
+                </h3>
+                <p className="text-purple-100 text-sm mt-1 opacity-90">
+                  Gemini identified {reviewQueue.suggestions.length} tasks from this message.
+                </p>
+              </div>
+              <button 
+                onClick={() => setReviewQueue(null)}
+                className="text-white/60 hover:text-white transition"
+              >
+                <X size={24} />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 bg-gray-50 max-h-[60vh] overflow-y-auto space-y-3">
+              {reviewQueue.suggestions.map((item, idx) => (
+                <div key={idx} className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+                  <h4 className="font-bold text-gray-900">{item.title}</h4>
+                  <div className="flex items-center gap-2 mt-2">
+                    <span className="text-xs font-bold uppercase tracking-wider text-gray-400">Project:</span>
+                    <span className="bg-blue-50 text-blue-700 px-2 py-1 rounded text-xs font-medium border border-blue-100">
+                      {item.projectName}
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-2 border-t border-gray-100 pt-2 italic">
+                    " {item.reasoning} "
+                  </p>
+                </div>
+              ))}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 border-t border-gray-100 bg-white flex justify-end gap-3">
+              <button 
+                onClick={() => setReviewQueue(null)}
+                className="px-4 py-2 text-gray-600 font-medium hover:bg-gray-100 rounded-lg transition"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={handleApproveSuggestions}
+                className="px-6 py-2 bg-purple-600 text-white font-bold rounded-lg hover:bg-purple-700 transition flex items-center gap-2 shadow-lg shadow-purple-200"
+              >
+                <Check size={18} />
+                Approve & Create
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

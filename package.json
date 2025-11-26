@@ -10,6 +10,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-http": "^2.5.4",
     "@tauri-apps/plugin-opener": "^2",
