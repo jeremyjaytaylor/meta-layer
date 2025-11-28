@@ -3,9 +3,11 @@ import { UnifiedTask } from "./types/unified";
 import { TaskCard } from "./components/TaskCard";
 import { fetchSlackSignals, fetchRichSignals } from "./adapters/slack"; 
 import { fetchAsanaTasks, completeAsanaTask, getProjectList, createAsanaTaskWithProject, createAsanaSubtask } from "./adapters/asana";
-import { analyzeSignal, synthesizeWorkload, ProposedTask, AiSuggestion } from "./adapters/gemini"; 
-import { RefreshCw, LayoutTemplate, Sparkles, X, Check, Inbox, Filter, BrainCircuit } from "lucide-react"; 
+import { analyzeSignal, synthesizeWorkload, ProposedTask, AiSuggestion } from "./adapters/gemini"; // batchCategorize REMOVED
+import { RefreshCw, LayoutTemplate, Sparkles, X, Check, Inbox, Filter, BrainCircuit, Calendar } from "lucide-react"; 
 import "./App.css";
+
+type TimeRange = 'today' | '3days' | 'week' | '2weeks' | 'month' | 'year' | 'custom';
 
 function App() {
   const [slackTasks, setSlackTasks] = useState<UnifiedTask[]>([]);
@@ -13,6 +15,10 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [analyzingId, setAnalyzingId] = useState<string | null>(null);
   
+  // -- TIME FILTER --
+  const [timeRange, setTimeRange] = useState<TimeRange>('week');
+  const [customDate, setCustomDate] = useState<string>('');
+
   // Modals
   const [reviewState, setReviewState] = useState<{ sourceTask: UnifiedTask, suggestions: AiSuggestion[], selectedIndices: Set<number> } | null>(null);
   const [synthesisResults, setSynthesisResults] = useState<ProposedTask[] | null>(null);
@@ -23,27 +29,38 @@ function App() {
     const stored = localStorage.getItem("meta_blocked_filters");
     return stored ? JSON.parse(stored) : [];
   });
-  
   const getArchivedIds = (): string[] => {
     const stored = localStorage.getItem("meta_archived_ids");
     return stored ? JSON.parse(stored) : [];
   };
-  
   const archiveId = (id: string) => {
     const current = getArchivedIds();
     localStorage.setItem("meta_archived_ids", JSON.stringify([...current, id]));
   };
-  
   useEffect(() => { localStorage.setItem("meta_blocked_filters", JSON.stringify(blockedFilters)); }, [blockedFilters]);
+
+  const calculateStartDate = (): Date | undefined => {
+    const now = new Date();
+    switch (timeRange) {
+        case 'today': return new Date(now.setHours(0,0,0,0));
+        case '3days': return new Date(now.setDate(now.getDate() - 3));
+        case 'week': return new Date(now.setDate(now.getDate() - 7));
+        case '2weeks': return new Date(now.setDate(now.getDate() - 14));
+        case 'month': return new Date(now.setMonth(now.getMonth() - 1));
+        case 'year': return new Date(now.setFullYear(now.getFullYear() - 1));
+        case 'custom': return customDate ? new Date(customDate) : undefined;
+        default: return undefined;
+    }
+  };
 
   // SYNC ENGINE
   const sync = async () => {
     setLoading(true);
     const archived = getArchivedIds();
-    
-    // We fetch Slack (which internally runs AI categorization now) and Asana
+    const startDate = calculateStartDate();
+
     const [slackData, asanaData] = await Promise.allSettled([
-      fetchSlackSignals(),
+      fetchSlackSignals(startDate),
       fetchAsanaTasks()
     ]);
     
@@ -54,10 +71,11 @@ function App() {
     }
     if (asanaData.status === 'fulfilled') setAsanaTasks(asanaData.value);
 
+    // Note: AI Categorization now happens INSIDE fetchSlackSignals
     setLoading(false);
   };
 
-  useEffect(() => { sync(); }, []);
+  useEffect(() => { sync(); }, [timeRange, customDate]);
 
   // ACTIONS
   const handleArchive = (id: string) => { archiveId(id); setSlackTasks(prev => prev.filter(t => t.id !== id)); };
@@ -68,7 +86,6 @@ function App() {
     if (!success) sync(); 
   };
 
-  // --- AI HANDLERS ---
   const handleAiPromote = async (task: UnifiedTask) => {
     setAnalyzingId(task.id); 
     const projects = await getProjectList();
@@ -103,8 +120,9 @@ function App() {
 
   const handleSynthesize = async () => {
     setLoading(true);
-    const signals = await fetchRichSignals();
-    if (signals.length === 0) { alert("No Slack signals found."); setLoading(false); return; }
+    const startDate = calculateStartDate();
+    const signals = await fetchRichSignals(startDate);
+    if (signals.length === 0) { alert("No Slack signals found in this time range."); setLoading(false); return; }
     const projects = await getProjectList();
     const plan = await synthesizeWorkload(signals, [], projects);
     setSynthesisResults(plan);
@@ -126,12 +144,10 @@ function App() {
       newResults.splice(index, 1);
       setSynthesisResults(newResults);
     }
-    
     const newAsanaTasks = await fetchAsanaTasks();
     setAsanaTasks(newAsanaTasks);
   };
 
-  // --- FILTERS ---
   const toggleFilter = (key: string) => {
     setBlockedFilters(prev => prev.includes(key) ? prev.filter(f => f !== key) : [...prev, key]);
   };
@@ -164,15 +180,32 @@ function App() {
 
   return (
     <div className="min-h-screen p-8 text-gray-900 font-sans bg-gray-50 relative">
-      <div className="max-w-7xl mx-auto flex justify-between items-center mb-8">
+      <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
+        
         <div className="flex items-center gap-3">
             <div className="p-2 bg-black rounded-lg"><LayoutTemplate className="text-white" size={24} /></div>
             <div><h1 className="text-2xl font-bold tracking-tight text-gray-900">Meta-Layer</h1></div>
         </div>
-        <div className="flex gap-2">
+        
+        <div className="flex flex-wrap gap-2 items-center">
+            
+            <div className="flex items-center gap-2 bg-white border border-gray-200 px-3 py-2 rounded-lg shadow-sm">
+                <Calendar size={16} className="text-gray-500" />
+                <select value={timeRange} onChange={(e) => setTimeRange(e.target.value as TimeRange)} className="bg-transparent border-none text-sm font-medium text-gray-700 focus:ring-0 cursor-pointer">
+                    <option value="today">Today</option>
+                    <option value="3days">Past 3 Days</option>
+                    <option value="week">Past Week</option>
+                    <option value="2weeks">Past 2 Weeks</option>
+                    <option value="month">Past Month</option>
+                    <option value="year">Past Year</option>
+                    <option value="custom">Custom...</option>
+                </select>
+                {timeRange === 'custom' && <input type="date" value={customDate} onChange={(e) => setCustomDate(e.target.value)} className="ml-2 border border-gray-300 rounded px-2 py-1 text-xs" />}
+            </div>
+
             <button onClick={handleSynthesize} className="flex items-center gap-2 bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition shadow-sm font-bold text-sm"><BrainCircuit size={16} />{loading ? "Thinking..." : "Synthesize Plan"}</button>
             <button onClick={() => setShowFilterModal(true)} className={`flex items-center gap-2 border px-3 py-2 rounded-lg transition shadow-sm font-medium text-sm ${blockedFilters.length > 0 ? 'bg-purple-50 border-purple-200 text-purple-700' : 'bg-white border-gray-200'}`}><Filter size={16} /> Filters {blockedFilters.length > 0 && `(${blockedFilters.length})`}</button>
-            <button onClick={sync} className="flex items-center gap-2 bg-white border border-gray-200 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-50 transition shadow-sm font-medium text-sm"><RefreshCw size={16} className={loading ? "animate-spin" : ""} />Sync</button>
+            <button onClick={sync} className="flex items-center gap-2 bg-white border border-gray-200 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-50 transition shadow-sm font-medium text-sm"><RefreshCw size={16} className={loading ? "animate-spin" : ""} /></button>
         </div>
       </div>
 
@@ -222,7 +255,6 @@ function App() {
         </div>
       )}
 
-      {/* FILTER MODAL */}
       {showFilterModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden animate-in fade-in zoom-in duration-200">

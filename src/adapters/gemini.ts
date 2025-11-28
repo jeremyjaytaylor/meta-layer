@@ -10,18 +10,16 @@ export interface ParsedMessage { msgId: string; suggestedProject: string; }
 export interface ProposedTask { title: string; description: string; project: string; subtasks: string[]; citations: string[]; }
 export interface AiSuggestion { title: string; projectName: string; reasoning: string; }
 
-// STRATEGY: The "Stable 2.5" Hierarchy
-// Based on your logs, 2.5-flash was the only one that returned a 200 OK.
+// STRATEGY: Use the model you confirmed worked (2.5 Flash), then fall back.
 const MODEL_CASCADE = [
-  "gemini-2.5-flash",  // The one that worked in Turn 19
-  "gemini-2.5-pro",    // The reasoning upgrade
-  "gemini-2.0-flash"   // Fallback to 2.0 Stable (not experimental)
+  "gemini-2.5-flash",    // Proven to work for you
+  "gemini-2.5-pro",
+  "gemini-2.0-flash-exp",
+  "gemini-1.5-pro"
 ];
 
-// --- HELPER: Delay for Rate Limits ---
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-// --- HELPER: Minify Data ---
 function minifySignals(signals: any[]): any[] {
   return signals.map(s => ({
     id: s.id,
@@ -44,7 +42,6 @@ async function runWithCascade(prompt: string, maxRetriesPerModel: number): Promi
       try {
         if (attempt > 0) console.log(`🔄 Retry ${attempt} on ${modelName}...`);
         
-        // console.log(`🧠 Sending to ${modelName}...`);
         const result = await model.generateContent(prompt);
         const text = result.response.text();
         const cleanJson = text.replace(/```json|```/g, '').trim();
@@ -56,7 +53,7 @@ async function runWithCascade(prompt: string, maxRetriesPerModel: number): Promi
 
         // Rate Limit (429) -> Wait and Retry SAME model
         if ((msg.includes("429") || msg.includes("503")) && attempt < maxRetriesPerModel) {
-          const delay = 2000 * Math.pow(2, attempt); // 2s, 4s, 8s
+          const delay = 2000 * Math.pow(2, attempt); 
           console.warn(`⚠️ Rate limit on ${modelName}. Waiting ${delay/1000}s...`);
           await wait(delay);
           continue; 
@@ -68,7 +65,7 @@ async function runWithCascade(prompt: string, maxRetriesPerModel: number): Promi
           break; 
         }
         
-        console.error(`❌ Error on ${modelName}:`, error);
+        console.warn(`❌ Error on ${modelName}: ${msg}. Switching...`);
         break;
       }
     }
@@ -98,10 +95,8 @@ export async function smartParseSlack(
   `;
 
   try {
-    // 0 Retries for list loading (Fail Fast)
     return await runWithCascade(prompt, 0); 
   } catch (e) {
-    console.warn("Categorization skipped.");
     return {};
   }
 }
@@ -143,8 +138,7 @@ export async function synthesizeWorkload(
   `;
 
   try {
-    // 3 Retries for Synthesis (Patient)
-    return await runWithCascade(prompt, 3);
+    return await runWithCascade(prompt, 2);
   } catch (e: any) {
     alert(`Synthesis Failed: ${e.message}`);
     return [];
