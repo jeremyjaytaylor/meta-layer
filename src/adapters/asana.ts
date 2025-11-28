@@ -17,14 +17,11 @@ async function getWorkspaceId(): Promise<string | null> {
     }
     return null;
   } catch (e) {
-    console.error("Failed to get workspace", e);
     return null;
   }
 }
 
-// ---------------------------------------------------------
 // READ: Fetch My Tasks
-// ---------------------------------------------------------
 export async function fetchAsanaTasks(): Promise<UnifiedTask[]> {
   try {
     const workspaceId = await getWorkspaceId();
@@ -42,8 +39,6 @@ export async function fetchAsanaTasks(): Promise<UnifiedTask[]> {
     if (!data.data) return [];
 
     return data.data.map((task: any) => ({
-      // STABLE ID FIX: 
-      // We use the Asana GID. We prefix 'asana-' to avoid collisions with other tools.
       id: `asana-${task.gid}`, 
       externalId: task.gid, 
       provider: 'asana',
@@ -63,78 +58,52 @@ export async function fetchAsanaTasks(): Promise<UnifiedTask[]> {
   }
 }
 
-// ---------------------------------------------------------
-// WRITE: Mark as Complete
-// ---------------------------------------------------------
+// WRITE: Complete Task
 export async function completeAsanaTask(taskId: string): Promise<boolean> {
   try {
-    console.log(`✅ Attempting to complete task: ${taskId}`);
-    
     const response = await fetch(`https://app.asana.com/api/1.0/tasks/${taskId}`, {
       method: 'PUT',
       headers: { 
         'Authorization': `Bearer ${ASANA_TOKEN}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ 
-        data: { completed: true } 
-      })
+      body: JSON.stringify({ data: { completed: true } })
     });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("❌ Asana Failure Details:", errorText);
-      return false;
-    }
-    
-    return true;
+    return response.ok;
   } catch (error) {
-    console.error("💥 Network/Logic Error:", error);
     return false;
   }
 }
 
-// ---------------------------------------------------------
-// AI HELPER: Get Project List
-// ---------------------------------------------------------
+// READ: Get Project List
 export async function getProjectList(): Promise<string[]> {
   try {
     const workspaceId = await getWorkspaceId();
     if (!workspaceId) return [];
-
     const response = await fetch(
       `https://app.asana.com/api/1.0/projects?workspace=${workspaceId}&archived=false&opt_fields=name`, 
-      {
-        method: 'GET',
-        headers: { 'Authorization': `Bearer ${ASANA_TOKEN}` }
-      }
+      { headers: { 'Authorization': `Bearer ${ASANA_TOKEN}` } }
     );
-
     const data = await response.json() as any;
     if (!data.data) return [];
-
     return data.data.map((p: any) => p.name);
   } catch (error) {
-    console.error("Failed to fetch projects:", error);
     return ["My Tasks"]; 
   }
 }
 
-// ---------------------------------------------------------
-// WRITE: Create Task (With Project Support)
-// ---------------------------------------------------------
-export async function createAsanaTaskWithProject(title: string, projectName: string, notes: string): Promise<boolean> {
+// WRITE: Create Parent Task (Returns ID)
+export async function createAsanaTaskWithProject(title: string, projectName: string, notes: string): Promise<string | null> {
   try {
     const workspaceId = await getWorkspaceId();
-    if (!workspaceId) return false;
+    if (!workspaceId) return null;
 
-    // Fetch projects to find the ID matching the name
+    // Find Project ID
     const projectsResponse = await fetch(
       `https://app.asana.com/api/1.0/projects?workspace=${workspaceId}&archived=false&opt_fields=name,gid`, 
       { headers: { 'Authorization': `Bearer ${ASANA_TOKEN}` } }
     );
     const projectsData = await projectsResponse.json() as any;
-    
     const project = projectsData.data.find((p: any) => p.name === projectName);
     const projectId = project ? project.gid : null;
 
@@ -145,9 +114,7 @@ export async function createAsanaTaskWithProject(title: string, projectName: str
       assignee: 'me'
     };
 
-    if (projectId) {
-      body.projects = [projectId];
-    }
+    if (projectId) body.projects = [projectId];
 
     const response = await fetch(`https://app.asana.com/api/1.0/tasks`, {
       method: 'POST',
@@ -158,9 +125,31 @@ export async function createAsanaTaskWithProject(title: string, projectName: str
       body: JSON.stringify({ data: body })
     });
     
-    return response.ok;
+    const json = await response.json() as any;
+    return json.data ? json.data.gid : null; // Return the new ID
+
   } catch (error) {
     console.error("Failed to create task:", error);
+    return null;
+  }
+}
+
+// WRITE: Create Subtask (The function that was missing!)
+export async function createAsanaSubtask(parentId: string, title: string): Promise<boolean> {
+  try {
+    const response = await fetch(`https://app.asana.com/api/1.0/tasks/${parentId}/subtasks`, {
+        method: 'POST',
+        headers: { 
+          'Authorization': `Bearer ${ASANA_TOKEN}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ 
+          data: { name: title } 
+        })
+      });
+      return response.ok;
+  } catch (e) {
+    console.error("Failed to create subtask", e);
     return false;
   }
 }
