@@ -14,15 +14,17 @@ function App() {
   const [asanaTasks, setAsanaTasks] = useState<UnifiedTask[]>([]);
   const [loading, setLoading] = useState(false);
   const [analyzingId, setAnalyzingId] = useState<string | null>(null);
-  const [slackProjectMap, setSlackProjectMap] = useState<Record<string, string>>({});
   
+  // -- TIME FILTER --
   const [timeRange, setTimeRange] = useState<TimeRange>('week');
   const [customDate, setCustomDate] = useState<string>('');
 
+  // Modals
   const [reviewState, setReviewState] = useState<{ sourceTask: UnifiedTask, suggestions: AiSuggestion[], selectedIndices: Set<number> } | null>(null);
   const [synthesisResults, setSynthesisResults] = useState<ProposedTask[] | null>(null);
   const [showFilterModal, setShowFilterModal] = useState(false);
   
+  // Persistence
   const [blockedFilters, setBlockedFilters] = useState<string[]>(() => {
     const stored = localStorage.getItem("meta_blocked_filters");
     return stored ? JSON.parse(stored) : [];
@@ -51,6 +53,7 @@ function App() {
     }
   };
 
+  // SYNC ENGINE
   const sync = async () => {
     setLoading(true);
     const archived = getArchivedIds();
@@ -61,17 +64,12 @@ function App() {
       fetchAsanaTasks()
     ]);
     
-    let newSlackTasks: UnifiedTask[] = [];
     if (slackData.status === 'fulfilled') {
-      newSlackTasks = slackData.value.filter(t => !archived.includes(t.id));
+      const newSlackTasks = slackData.value.filter(t => !archived.includes(t.id));
       setSlackTasks(newSlackTasks);
     }
     if (asanaData.status === 'fulfilled') setAsanaTasks(asanaData.value);
 
-    // AI Categorization happens internally in fetchSlackSignals now
-    // We can just trigger a state update if we wanted to extract the map, 
-    // but the tasks come pre-labeled now.
-    
     setLoading(false);
   };
 
@@ -117,13 +115,10 @@ function App() {
     setLoading(false);
   };
 
-  // --- UPDATED SYNTHESIZE HANDLER ---
   const handleSynthesize = async () => {
     setLoading(true);
     const startDate = calculateStartDate();
-    
-    // 1. Fetch RAW data (Deep search)
-    const signals = await fetchRichSignals(startDate);
+    const signals = await fetchRichSignals(startDate); // Gets Deep Data
     
     if (signals.length === 0) { 
         alert("No Slack signals found in this time range."); 
@@ -131,23 +126,20 @@ function App() {
         return; 
     }
 
-    // 2. APPLY FILTERS (Don't send blocked channels to AI)
+    // Apply Client Filters to Synthesis Data
     const filteredSignals = signals.filter(s => {
         const channelKey = `channel:${s.channelName}`;
-        // Note: RichSignals doesn't always have author easily accessible without deep parsing,
-        // so filtering by channel is the safest "Bulk" filter.
         return !blockedFilters.includes(channelKey);
     });
 
     if (filteredSignals.length === 0) {
-        alert("All signals were filtered out.");
+        alert("All signals filtered out.");
         setLoading(false);
         return;
     }
 
-    // 3. Send to AI
     const projects = await getProjectList();
-    const plan = await synthesizeWorkload(filteredSignals, [], projects);
+    const plan = await synthesizeWorkload(filteredSignals, [], projects); // Sends to Gemini
     
     setSynthesisResults(plan);
     setLoading(false);
@@ -174,6 +166,14 @@ function App() {
 
   const toggleFilter = (key: string) => {
     setBlockedFilters(prev => prev.includes(key) ? prev.filter(f => f !== key) : [...prev, key]);
+  };
+
+  const toggleAll = (keys: string[], shouldBlock: boolean) => {
+    setBlockedFilters(prev => {
+        const currentSet = new Set(prev);
+        keys.forEach(k => shouldBlock ? currentSet.add(k) : currentSet.delete(k));
+        return Array.from(currentSet);
+    });
   };
   
   const availableFilters = useMemo(() => {
@@ -205,14 +205,11 @@ function App() {
   return (
     <div className="min-h-screen p-8 text-gray-900 font-sans bg-gray-50 relative">
       <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
-        
         <div className="flex items-center gap-3">
             <div className="p-2 bg-black rounded-lg"><LayoutTemplate className="text-white" size={24} /></div>
             <div><h1 className="text-2xl font-bold tracking-tight text-gray-900">Meta-Layer</h1></div>
         </div>
-        
         <div className="flex flex-wrap gap-2 items-center">
-            
             <div className="flex items-center gap-2 bg-white border border-gray-200 px-3 py-2 rounded-lg shadow-sm">
                 <Calendar size={16} className="text-gray-500" />
                 <select value={timeRange} onChange={(e) => setTimeRange(e.target.value as TimeRange)} className="bg-transparent border-none text-sm font-medium text-gray-700 focus:ring-0 cursor-pointer">
@@ -226,17 +223,15 @@ function App() {
                 </select>
                 {timeRange === 'custom' && <input type="date" value={customDate} onChange={(e) => setCustomDate(e.target.value)} className="ml-2 border border-gray-300 rounded px-2 py-1 text-xs" />}
             </div>
-
             <button onClick={handleSynthesize} className="flex items-center gap-2 bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition shadow-sm font-bold text-sm"><BrainCircuit size={16} />{loading ? "Thinking..." : "Synthesize Plan"}</button>
             <button onClick={() => setShowFilterModal(true)} className={`flex items-center gap-2 border px-3 py-2 rounded-lg transition shadow-sm font-medium text-sm ${blockedFilters.length > 0 ? 'bg-purple-50 border-purple-200 text-purple-700' : 'bg-white border-gray-200'}`}><Filter size={16} /> Filters {blockedFilters.length > 0 && `(${blockedFilters.length})`}</button>
-            <button onClick={sync} className="flex items-center gap-2 bg-white border border-gray-200 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-50 transition shadow-sm font-medium text-sm"><RefreshCw size={16} className={loading ? "animate-spin" : ""} /></button>
+            <button onClick={sync} className="flex items-center gap-2 bg-white border border-gray-200 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-50 transition shadow-sm font-medium text-sm"><RefreshCw size={16} className={loading ? "animate-spin" : ""} />Sync</button>
         </div>
       </div>
-
       <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-8">
          <div className="flex flex-col gap-4">
             <h2 className="text-sm font-bold text-gray-500 uppercase tracking-wider flex items-center gap-2">Incoming Signals <span className="bg-purple-100 text-purple-700 text-xs px-2 py-0.5 rounded-full">{visibleSlackTasks.length}</span></h2>
-            {renderGroupedList(visibleSlackTasks, (t) => t.metadata.channel, (t) => (
+            {renderGroupedList(visibleSlackTasks, (t) => t.metadata.channel || "Inbox", (t) => (
                 <div key={t.id} className="relative"><TaskCard task={t} onPromote={handleAiPromote} onArchive={handleArchive} />
                 {analyzingId === t.id && <div className="absolute inset-0 bg-white/90 flex items-center justify-center rounded-lg z-10 backdrop-blur-sm"><Sparkles size={20} className="text-purple-700 animate-pulse" /></div>}</div>
             ))}
@@ -246,7 +241,6 @@ function App() {
             {renderGroupedList(asanaTasks, (t) => t.metadata.project || "My Tasks", (t) => <TaskCard key={t.id} task={t} onComplete={handleCompleteTask} />)}
          </div>
       </div>
-
       {synthesisResults && (
         <div className="fixed inset-0 bg-gray-900/90 backdrop-blur-sm flex items-center justify-center z-50 p-6">
           <div className="bg-gray-50 rounded-2xl shadow-2xl max-w-5xl w-full h-[85vh] flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">
@@ -278,7 +272,6 @@ function App() {
           </div>
         </div>
       )}
-
       {showFilterModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden animate-in fade-in zoom-in duration-200">
@@ -288,14 +281,20 @@ function App() {
             </div>
             <div className="p-6 max-h-[60vh] overflow-y-auto">
               <div className="mb-6">
-                <h4 className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-3">Channels</h4>
+                <div className="flex justify-between items-center mb-3">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-gray-400">Channels / Projects</h4>
+                    <div className="flex gap-2 text-xs text-blue-600">
+                        <button onClick={() => toggleAll(availableFilters.channels.map(c => `channel:${c}`), false)}>All</button>
+                        <button onClick={() => toggleAll(availableFilters.channels.map(c => `channel:${c}`), true)}>None</button>
+                    </div>
+                </div>
                 <div className="space-y-2">
                   {availableFilters.channels.map(channel => {
                     const key = `channel:${channel}`;
                     const isBlocked = blockedFilters.includes(key);
                     return (
                       <label key={key} className="flex items-center justify-between p-3 rounded-lg border border-gray-100 hover:bg-gray-50 cursor-pointer">
-                        <span className="font-medium text-gray-700">{channel.startsWith('📂') ? channel : `#${channel}`}</span>
+                        <span className="font-medium text-gray-700">{channel}</span>
                         <input type="checkbox" checked={!isBlocked} onChange={() => toggleFilter(key)} className="w-5 h-5 rounded border-gray-300 text-purple-600 focus:ring-purple-500" />
                       </label>
                     );
@@ -303,7 +302,13 @@ function App() {
                 </div>
               </div>
               <div>
-                <h4 className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-3">Authors</h4>
+                <div className="flex justify-between items-center mb-3">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-gray-400">Authors</h4>
+                    <div className="flex gap-2 text-xs text-blue-600">
+                        <button onClick={() => toggleAll(availableFilters.authors.map(a => `author:${a}`), false)}>All</button>
+                        <button onClick={() => toggleAll(availableFilters.authors.map(a => `author:${a}`), true)}>None</button>
+                    </div>
+                </div>
                 <div className="space-y-2">
                   {availableFilters.authors.map(author => {
                     const key = `author:${author}`;
@@ -321,7 +326,6 @@ function App() {
           </div>
         </div>
       )}
-
       {reviewState && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden animate-in fade-in zoom-in duration-200">

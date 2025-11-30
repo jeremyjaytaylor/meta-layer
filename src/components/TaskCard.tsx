@@ -1,5 +1,7 @@
 import { UnifiedTask } from "../types/unified";
-import { MessageSquare, CheckSquare, Github, FileText, HardDrive, Check, ArrowRight, Archive } from "lucide-react";
+// NEW: Import the 'open' command
+import { open } from '@tauri-apps/plugin-shell';
+import { MessageSquare, CheckSquare, Github, FileText, HardDrive, Check, ArrowRight, Archive, ExternalLink } from "lucide-react";
 
 const Icons = {
   slack: MessageSquare,
@@ -25,14 +27,21 @@ interface TaskCardProps {
 }
 
 export function TaskCard({ task, onComplete, onPromote, onArchive }: TaskCardProps) {
-  const Icon = Icons[task.provider];
+  const Icon = Icons[task.provider] || MessageSquare;
   const colorClass = Colors[task.provider] || "border-gray-200 bg-white";
 
-  // UPDATED: Now includes Year
-  // Example output: "Nov 26, 2025 • 5:45 PM"
   const dateObj = new Date(task.createdAt);
   const dateStr = dateObj.toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' });
   const timeStr = dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  // HANDLER: Open link in system browser
+  const handleOpenLink = async () => {
+    try {
+      await open(task.url);
+    } catch (e) {
+      console.error("Failed to open link:", e);
+    }
+  };
 
   return (
     <div className={`p-4 rounded-lg shadow-sm border-l-4 transition mb-2 flex gap-3 ${colorClass} group max-w-full`}>
@@ -40,7 +49,7 @@ export function TaskCard({ task, onComplete, onPromote, onArchive }: TaskCardPro
       {/* 1. Main Content Area */}
       <div 
         className="flex-1 cursor-pointer min-w-0"
-        onClick={() => window.open(task.url, '_blank')}
+        onClick={handleOpenLink}
       >
         <div className="flex justify-between items-start mb-1">
           <div className="flex items-center gap-2">
@@ -49,15 +58,19 @@ export function TaskCard({ task, onComplete, onPromote, onArchive }: TaskCardPro
               {task.provider}
             </span>
           </div>
-          {/* Timestamp Display */}
           <span className="text-xs text-gray-400 flex-shrink-0 ml-2 whitespace-nowrap">
             {dateStr} • {timeStr}
           </span>
         </div>
 
-        <h3 className="font-medium text-gray-800 leading-snug text-sm break-words whitespace-normal">
-          {task.title}
-        </h3>
+        <div className="flex items-start gap-2">
+            <h3 className="font-medium text-gray-800 leading-snug text-sm break-words whitespace-normal group-hover:text-blue-700 transition-colors">
+                {task.title}
+            </h3>
+            {(task.provider === 'gdrive' || task.provider === 'notion') && (
+                <ExternalLink size={12} className="text-blue-500 mt-1 flex-shrink-0" />
+            )}
+        </div>
         
         <div className="mt-2 flex gap-2 flex-wrap">
           {task.metadata.author && (
@@ -65,9 +78,9 @@ export function TaskCard({ task, onComplete, onPromote, onArchive }: TaskCardPro
               @{task.metadata.author}
             </span>
           )}
-           {task.metadata.project && (
+           {task.metadata.channel && (
             <span className="text-xs bg-white/50 border border-gray-200 px-2 py-1 rounded text-gray-600 truncate max-w-[150px]">
-              {task.metadata.project}
+              {task.metadata.channel}
             </span>
           )}
         </div>
@@ -76,7 +89,6 @@ export function TaskCard({ task, onComplete, onPromote, onArchive }: TaskCardPro
       {/* 2. Action Buttons */}
       <div className="flex flex-col justify-start gap-2 border-l border-gray-200/50 pl-2 opacity-80 group-hover:opacity-100 transition flex-shrink-0">
         
-        {/* Asana: Complete */}
         {task.provider === 'asana' && onComplete && (
           <button 
             onClick={(e) => { e.stopPropagation(); if (task.externalId) onComplete(task.externalId); }}
@@ -87,8 +99,7 @@ export function TaskCard({ task, onComplete, onPromote, onArchive }: TaskCardPro
           </button>
         )}
 
-        {/* Slack: Promote */}
-        {task.provider === 'slack' && onPromote && (
+        {task.provider !== 'asana' && onPromote && (
           <button 
             onClick={(e) => { e.stopPropagation(); onPromote(task); }}
             className="p-1.5 bg-white rounded hover:bg-blue-100 text-gray-400 hover:text-blue-600 transition border border-gray-200"
@@ -98,8 +109,7 @@ export function TaskCard({ task, onComplete, onPromote, onArchive }: TaskCardPro
           </button>
         )}
 
-        {/* Slack: Archive */}
-        {task.provider === 'slack' && onArchive && (
+        {task.provider !== 'asana' && onArchive && (
           <button 
             onClick={(e) => { e.stopPropagation(); onArchive(task.id); }}
             className="p-1.5 bg-white rounded hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition border border-gray-200"

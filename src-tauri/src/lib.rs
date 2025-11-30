@@ -7,8 +7,11 @@ fn greet(name: &str) -> String {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_http::init())
-        .plugin(tauri_plugin_opener::init())
+        // --- PLUGINS MUST BE REGISTERED HERE ---
+        .plugin(tauri_plugin_shell::init())   // <--- Required for opening links in browser
+        .plugin(tauri_plugin_http::init())    // <--- Required for fetching Slack/Asana data
+        .plugin(tauri_plugin_opener::init())  // <--- Standard Tauri file opener
+        // ---------------------------------------
         .invoke_handler(tauri::generate_handler![greet])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
