@@ -6,7 +6,7 @@ import { getProjectList } from './asana';
 // ⚠️ PASTE YOUR SLACK TOKEN HERE
 const SLACK_TOKEN = "xoxp-9898104501-748244888420-10001329191810-c0c49f6cecdcb50074529c60ce59b252"; 
 
-const MAX_PAGES = 5; // Fetch up to 500 messages (100 * 5)
+const BASE_QUERY = "mention:@me OR to:me"; 
 
 function cleanSlackText(text: string): string {
   if (!text) return "";
@@ -58,15 +58,12 @@ async function fetchThread(channelId: string, ts: string): Promise<any[]> {
 // ---------------------------------------------------------
 export async function fetchSlackSignals(startDate?: Date): Promise<UnifiedTask[]> {
   try {
-    // 1. Get Real User ID to make search accurate
     const userId = await getMyUserId();
     if (!userId) {
         console.error("Could not determine user ID");
         return [];
     }
 
-    // 2. Construct Robust Query
-    // Searches for explicit tags <@U123> OR Direct Messages to you
     let queryString = `<@${userId}> OR to:${userId}`;
     
     if (startDate) {
@@ -75,34 +72,26 @@ export async function fetchSlackSignals(startDate?: Date): Promise<UnifiedTask[]
 
     console.log(`🔎 Slack Query: ${queryString}`);
 
-    // 3. Pagination Loop
+    const encodedQuery = encodeURIComponent(queryString);
+    
+    // Pagination Loop (Fetch up to 200 messages for the UI list)
     let allMatches: any[] = [];
     let page = 1;
-    let totalPages = 1; // Will update after first request
+    const MAX_PAGES = 2; // Keep UI fast
 
     while (page <= MAX_PAGES) {
-        const encodedQuery = encodeURIComponent(queryString);
-        
-        console.log(`📥 Fetching Page ${page}...`);
         const response = await fetch(`https://slack.com/api/search.messages?query=${encodedQuery}&sort=timestamp&sort_dir=desc&count=100&page=${page}`, {
             headers: { 'Authorization': `Bearer ${SLACK_TOKEN}` },
         });
-
         if (!response.ok) break;
         const data = await response.json() as any;
         if (!data.ok || !data.messages || !data.messages.matches) break;
-
         allMatches = [...allMatches, ...data.messages.matches];
-        
-        // Check pagination
-        totalPages = data.messages.paging.pages;
-        if (page >= totalPages) break; // Stop if we hit the end
+        if (page >= data.messages.paging.pages) break;
         page++;
     }
 
-    console.log(`✅ Total Messages Found: ${allMatches.length}`);
-
-    // 4. Hydrate "Ghost" messages (Parallel)
+    // Hydrate Ghosts
     const rawMatches = await Promise.all(allMatches.map(async (match: any) => {
       if (!match.text || match.text === "") {
         const hydrated = await hydrateMessage(match.channel.id, match.ts);
@@ -111,17 +100,16 @@ export async function fetchSlackSignals(startDate?: Date): Promise<UnifiedTask[]
       return match;
     }));
 
-    // 5. AI Categorization
+    // AI Categorization
     let aiParsedData: any = {};
     try {
         const projects = await getProjectList(); 
-        // Note: With 500 messages, AI batching might hit limits. 
-        // We slice to the most recent 50 for AI to keep it fast/safe.
+        // Slice to most recent 50 for AI to keep it fast
         const recentMatches = rawMatches.slice(0, 50); 
         aiParsedData = await smartParseSlack(recentMatches, projects);
     } catch (e) { }
 
-    // 6. Map to UnifiedTask
+    // Map to UnifiedTask
     return rawMatches.map((match: any) => {
       let fullMsg = match;
       const channelId = match.channel.id;
@@ -178,6 +166,7 @@ export async function fetchSlackSignals(startDate?: Date): Promise<UnifiedTask[]
 // ---------------------------------------------------------
 export async function fetchRichSignals(startDate?: Date): Promise<any[]> {
   try {
+    // FIX: Get Real User ID (Critical for Synthesis finding messages)
     const userId = await getMyUserId();
     if (!userId) return [];
 
@@ -186,7 +175,7 @@ export async function fetchRichSignals(startDate?: Date): Promise<any[]> {
     
     const encodedQuery = encodeURIComponent(queryString);
     
-    // Increased count for synthesis to 50
+    // Fetch up to 50 threads for synthesis
     const response = await fetch(`https://slack.com/api/search.messages?query=${encodedQuery}&sort=timestamp&sort_dir=desc&count=50`, {
       headers: { 'Authorization': `Bearer ${SLACK_TOKEN}` },
     });
@@ -200,7 +189,13 @@ export async function fetchRichSignals(startDate?: Date): Promise<any[]> {
       if (match.reply_count && match.reply_count > 0) {
         thread = await fetchThread(match.channel.id, match.ts);
       }
-      return { id: `slack-${match.ts}`, mainMessage: match, thread: thread, source: 'slack' };
+      return { 
+          id: `slack-${match.ts}`, 
+          mainMessage: match, 
+          thread: thread, 
+          source: 'slack',
+          channelName: match.channel.name // Ensure channel name is passed for context
+      };
     }));
 
     return richData;

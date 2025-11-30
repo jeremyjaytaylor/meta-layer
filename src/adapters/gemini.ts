@@ -5,33 +5,33 @@ const API_KEY = "AIzaSyARHl3CPNMtwj0JsLZSQrYRBSYrZ8DcuaI";
 
 const genAI = new GoogleGenerativeAI(API_KEY);
 
-// --- TYPES ---
 export interface ParsedMessage { msgId: string; suggestedProject: string; }
 export interface ProposedTask { title: string; description: string; project: string; subtasks: string[]; citations: string[]; }
 export interface AiSuggestion { title: string; projectName: string; reasoning: string; }
 
-// STRATEGY: Use the model you confirmed worked (2.5 Flash), then fall back.
+// STRATEGY: Prioritize Stable 2.5 Flash, fallback to 2.0 Exp
 const MODEL_CASCADE = [
-  "gemini-2.5-flash",    // Proven to work for you
+  "gemini-2.5-flash",    
   "gemini-2.5-pro",
   "gemini-2.0-flash-exp",
+  "gemini-1.5-flash",
   "gemini-1.5-pro"
 ];
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+// FIX: Added channel and ts to minified data for better AI context
 function minifySignals(signals: any[]): any[] {
   return signals.map(s => ({
     id: s.id,
+    channel: s.channelName || "unknown", 
+    date: s.mainMessage?.ts,
     text: s.mainMessage?.text || "",
     user: s.mainMessage?.username || s.mainMessage?.user,
-    replies: s.thread ? s.thread.map((t: any) => t.text) : []
+    replies: s.thread ? s.thread.map((t: any) => ({ user: t.user, text: t.text })) : []
   }));
 }
 
-// ---------------------------------------------------------
-// CORE RUNNER
-// ---------------------------------------------------------
 async function runWithCascade(prompt: string, maxRetriesPerModel: number): Promise<any> {
   let lastError = null;
 
@@ -51,7 +51,7 @@ async function runWithCascade(prompt: string, maxRetriesPerModel: number): Promi
         const msg = error.message || "";
         lastError = error;
 
-        // Rate Limit (429) -> Wait and Retry SAME model
+        // Rate Limit -> Wait and Retry SAME model
         if ((msg.includes("429") || msg.includes("503")) && attempt < maxRetriesPerModel) {
           const delay = 2000 * Math.pow(2, attempt); 
           console.warn(`⚠️ Rate limit on ${modelName}. Waiting ${delay/1000}s...`);
@@ -59,7 +59,7 @@ async function runWithCascade(prompt: string, maxRetriesPerModel: number): Promi
           continue; 
         }
 
-        // Not Found (404) -> Skip to next model immediately
+        // Not Found -> Skip to next model immediately
         if (msg.includes("404") || msg.includes("not found")) {
           console.warn(`⚠️ ${modelName} not found. Skipping...`);
           break; 
@@ -74,9 +74,6 @@ async function runWithCascade(prompt: string, maxRetriesPerModel: number): Promi
   throw lastError || new Error("All models failed.");
 }
 
-// ---------------------------------------------------------
-// BRAIN 1: Batch Project Categorizer
-// ---------------------------------------------------------
 export async function smartParseSlack(
   rawMessages: any[], 
   availableProjects: string[]
@@ -101,9 +98,6 @@ export async function smartParseSlack(
   }
 }
 
-// ---------------------------------------------------------
-// BRAIN 2: Synthesize Workload (God Mode)
-// ---------------------------------------------------------
 export async function synthesizeWorkload(
   activeSignals: any[], 
   archivedContext: any[],
@@ -145,9 +139,6 @@ export async function synthesizeWorkload(
   }
 }
 
-// ---------------------------------------------------------
-// BRAIN 3: Single Signal Analysis
-// ---------------------------------------------------------
 export async function analyzeSignal(
   slackMessage: string, 
   availableProjects: string[]

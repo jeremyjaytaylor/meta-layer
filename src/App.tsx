@@ -3,7 +3,7 @@ import { UnifiedTask } from "./types/unified";
 import { TaskCard } from "./components/TaskCard";
 import { fetchSlackSignals, fetchRichSignals } from "./adapters/slack"; 
 import { fetchAsanaTasks, completeAsanaTask, getProjectList, createAsanaTaskWithProject, createAsanaSubtask } from "./adapters/asana";
-import { analyzeSignal, synthesizeWorkload, ProposedTask, AiSuggestion } from "./adapters/gemini"; // batchCategorize REMOVED
+import { analyzeSignal, synthesizeWorkload, ProposedTask, AiSuggestion } from "./adapters/gemini"; 
 import { RefreshCw, LayoutTemplate, Sparkles, X, Check, Inbox, Filter, BrainCircuit, Calendar } from "lucide-react"; 
 import "./App.css";
 
@@ -14,17 +14,15 @@ function App() {
   const [asanaTasks, setAsanaTasks] = useState<UnifiedTask[]>([]);
   const [loading, setLoading] = useState(false);
   const [analyzingId, setAnalyzingId] = useState<string | null>(null);
+  const [slackProjectMap, setSlackProjectMap] = useState<Record<string, string>>({});
   
-  // -- TIME FILTER --
   const [timeRange, setTimeRange] = useState<TimeRange>('week');
   const [customDate, setCustomDate] = useState<string>('');
 
-  // Modals
   const [reviewState, setReviewState] = useState<{ sourceTask: UnifiedTask, suggestions: AiSuggestion[], selectedIndices: Set<number> } | null>(null);
   const [synthesisResults, setSynthesisResults] = useState<ProposedTask[] | null>(null);
   const [showFilterModal, setShowFilterModal] = useState(false);
   
-  // Persistence
   const [blockedFilters, setBlockedFilters] = useState<string[]>(() => {
     const stored = localStorage.getItem("meta_blocked_filters");
     return stored ? JSON.parse(stored) : [];
@@ -53,7 +51,6 @@ function App() {
     }
   };
 
-  // SYNC ENGINE
   const sync = async () => {
     setLoading(true);
     const archived = getArchivedIds();
@@ -64,20 +61,22 @@ function App() {
       fetchAsanaTasks()
     ]);
     
+    let newSlackTasks: UnifiedTask[] = [];
     if (slackData.status === 'fulfilled') {
-      // Filter out archived items
-      const newSlackTasks = slackData.value.filter(t => !archived.includes(t.id));
+      newSlackTasks = slackData.value.filter(t => !archived.includes(t.id));
       setSlackTasks(newSlackTasks);
     }
     if (asanaData.status === 'fulfilled') setAsanaTasks(asanaData.value);
 
-    // Note: AI Categorization now happens INSIDE fetchSlackSignals
+    // AI Categorization happens internally in fetchSlackSignals now
+    // We can just trigger a state update if we wanted to extract the map, 
+    // but the tasks come pre-labeled now.
+    
     setLoading(false);
   };
 
   useEffect(() => { sync(); }, [timeRange, customDate]);
 
-  // ACTIONS
   const handleArchive = (id: string) => { archiveId(id); setSlackTasks(prev => prev.filter(t => t.id !== id)); };
 
   const handleCompleteTask = async (taskId: string) => {
@@ -118,13 +117,38 @@ function App() {
     setLoading(false);
   };
 
+  // --- UPDATED SYNTHESIZE HANDLER ---
   const handleSynthesize = async () => {
     setLoading(true);
     const startDate = calculateStartDate();
+    
+    // 1. Fetch RAW data (Deep search)
     const signals = await fetchRichSignals(startDate);
-    if (signals.length === 0) { alert("No Slack signals found in this time range."); setLoading(false); return; }
+    
+    if (signals.length === 0) { 
+        alert("No Slack signals found in this time range."); 
+        setLoading(false); 
+        return; 
+    }
+
+    // 2. APPLY FILTERS (Don't send blocked channels to AI)
+    const filteredSignals = signals.filter(s => {
+        const channelKey = `channel:${s.channelName}`;
+        // Note: RichSignals doesn't always have author easily accessible without deep parsing,
+        // so filtering by channel is the safest "Bulk" filter.
+        return !blockedFilters.includes(channelKey);
+    });
+
+    if (filteredSignals.length === 0) {
+        alert("All signals were filtered out.");
+        setLoading(false);
+        return;
+    }
+
+    // 3. Send to AI
     const projects = await getProjectList();
-    const plan = await synthesizeWorkload(signals, [], projects);
+    const plan = await synthesizeWorkload(filteredSignals, [], projects);
+    
     setSynthesisResults(plan);
     setLoading(false);
   };
