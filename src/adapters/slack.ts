@@ -1,11 +1,11 @@
 import { fetch } from '@tauri-apps/plugin-http';
 import { UnifiedTask } from '../types/unified';
 
-// ⚠️ PASTE YOUR SLACK TOKEN HERE
-const SLACK_TOKEN = "xoxp-9898104501-748244888420-10001329191810-c0c49f6cecdcb50074529c60ce59b252"; 
+// SECURE: Load from environment variable
+const SLACK_TOKEN = import.meta.env.VITE_SLACK_TOKEN;
 
 // Safety Cap: Fetch up to 500 messages
-const MAX_PAGES = 10; 
+const MAX_PAGES = 5; 
 
 // --- CONFIG: Channel -> Project Mapping ---
 const PROJECT_MAP: Record<string, string> = {
@@ -56,6 +56,7 @@ function extractLink(match: any): string {
 // --- API HELPERS ---
 async function getMyUserId(): Promise<string | null> {
   try {
+    if (!SLACK_TOKEN) throw new Error("Missing VITE_SLACK_TOKEN");
     const response = await fetch('https://slack.com/api/auth.test', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${SLACK_TOKEN}` }
@@ -163,21 +164,17 @@ function parseMessage(match: any): UnifiedTask {
 }
 
 // ---------------------------------------------------------
-// EXPORT 1: Main Fetcher
+// EXPORT 1: Main Fetcher (List View)
 // ---------------------------------------------------------
 export async function fetchSlackSignals(startDate?: Date): Promise<UnifiedTask[]> {
   try {
     const userId = await getMyUserId();
     if (!userId) return [];
 
-    // 1. QUERY: The "Vacuum" Strategy
-    // Just grab everything "to:me". No exclusions here.
+    // VACUUM QUERY: "to:me" only (client-side filters handle date/noise)
     let queryString = `to:${userId}`;
     
-    if (startDate) {
-        queryString += ` after:${formatDateForSlack(startDate)}`;
-    }
-
+    // NOTE: We do NOT add "after:date" here to avoid API bugs.
     const encodedQuery = encodeURIComponent(queryString);
     
     let allMatches: any[] = [];
@@ -195,24 +192,23 @@ export async function fetchSlackSignals(startDate?: Date): Promise<UnifiedTask[]
         if (!data.ok || !data.messages || !data.messages.matches) break;
 
         allMatches = [...allMatches, ...data.messages.matches];
-        
         if (page >= data.messages.paging.pages) break;
         page++;
     }
 
-    console.log(`✅ Total Raw Messages Found: ${allMatches.length}`);
+    console.log(`✅ Total Raw Messages: ${allMatches.length}`);
 
-    // 2. CLIENT-SIDE FILTERING
+    // Client-Side Filtering
     const filteredMatches = allMatches.filter((match: any) => {
         const rawJson = JSON.stringify(match).toLowerCase();
+        const msgDate = new Date(parseFloat(match.ts) * 1000);
+
+        // Date Filter
+        if (startDate && msgDate < startDate) return false;
         
-        // Block Asana
+        // Noise Filters
         if (match.username === 'asana') return false;
-
-        // Block "Resolved" threads
         if (rawJson.includes("marked a thread as resolved")) return false;
-
-        // Block "Fun" channels
         if (match.channel && match.channel.name && match.channel.name.toLowerCase().startsWith("fun")) return false;
 
         return true;
@@ -220,7 +216,7 @@ export async function fetchSlackSignals(startDate?: Date): Promise<UnifiedTask[]
 
     console.log(`✅ Filtered Count: ${filteredMatches.length}`);
 
-    // 3. Hydrate Ghosts (Parallel)
+    // Hydrate Ghosts
     const rawMatches = await Promise.all(filteredMatches.map(async (match: any) => {
       if (!match.text || match.text === "") {
         const hydrated = await hydrateMessage(match.channel.id, match.ts);
@@ -238,16 +234,15 @@ export async function fetchSlackSignals(startDate?: Date): Promise<UnifiedTask[]
 }
 
 // ---------------------------------------------------------
-// EXPORT 2: Synthesis Fetcher (Same logic)
+// EXPORT 2: Rich Fetcher (Synthesis)
 // ---------------------------------------------------------
 export async function fetchRichSignals(startDate?: Date): Promise<any[]> {
   try {
     const userId = await getMyUserId();
     if (!userId) return [];
 
-    // SAME VACUUM QUERY
+    // Same Vacuum Query for consistency
     let queryString = `to:${userId}`;
-    if (startDate) queryString += ` after:${formatDateForSlack(startDate)}`;
     const encodedQuery = encodeURIComponent(queryString);
     
     const response = await fetch(`https://slack.com/api/search.messages?query=${encodedQuery}&sort=timestamp&sort_dir=desc&count=50`, {
@@ -258,9 +253,12 @@ export async function fetchRichSignals(startDate?: Date): Promise<any[]> {
     const data = await response.json() as any;
     if (!data.ok || !data.messages) return [];
 
-    // Apply filters BEFORE fetching threads to save bandwidth
+    // Filter matches before fetching threads to save bandwidth
     const filteredMatches = data.messages.matches.filter((match: any) => {
         const rawJson = JSON.stringify(match).toLowerCase();
+        const msgDate = new Date(parseFloat(match.ts) * 1000);
+
+        if (startDate && msgDate < startDate) return false;
         if (match.username === 'asana') return false;
         if (rawJson.includes("marked a thread as resolved")) return false;
         return true;

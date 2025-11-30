@@ -1,15 +1,15 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
-// ⚠️ PASTE YOUR GEMINI KEY HERE
-const API_KEY = "AIzaSyARHl3CPNMtwj0JsLZSQrYRBSYrZ8DcuaI"; 
+// SECURE: Load from environment variable
+const API_KEY = import.meta.env.VITE_GEMINI_API_KEY; 
 
 const genAI = new GoogleGenerativeAI(API_KEY);
 
+export interface ParsedMessage { msgId: string; suggestedProject: string; }
 export interface ProposedTask { title: string; description: string; project: string; subtasks: string[]; citations: string[]; }
 export interface AiSuggestion { title: string; projectName: string; reasoning: string; }
 
 // STRATEGY: Stable Cascade (2.5 -> 1.5)
-// We remove experimental models to ensure stability for synthesis.
 const MODEL_CASCADE = [
   "gemini-2.5-flash",   
   "gemini-1.5-flash",
@@ -22,7 +22,7 @@ const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 function minifySignals(signals: any[]): any[] {
   return signals.map(s => ({
     id: s.id,
-    channel: s.channelName, // Important context!
+    channel: s.channelName, 
     text: s.mainMessage?.text || "",
     user: s.mainMessage?.username || s.mainMessage?.user,
     replies: s.thread ? s.thread.map((t: any) => ({ user: t.user, text: t.text })) : []
@@ -34,36 +34,48 @@ async function runWithCascade(prompt: string, maxRetriesPerModel: number): Promi
 
   for (const modelName of MODEL_CASCADE) {
     const model = genAI.getGenerativeModel({ model: modelName });
+    
     for (let attempt = 0; attempt <= maxRetriesPerModel; attempt++) {
       try {
         if (attempt > 0) console.log(`🔄 Retry ${attempt} on ${modelName}...`);
+        
         const result = await model.generateContent(prompt);
         const text = result.response.text();
         const cleanJson = text.replace(/```json|```/g, '').trim();
         return JSON.parse(cleanJson);
+
       } catch (error: any) {
         const msg = error.message || "";
         lastError = error;
+
         if ((msg.includes("429") || msg.includes("503")) && attempt < maxRetriesPerModel) {
           const delay = 2000 * Math.pow(2, attempt); 
           console.warn(`⚠️ Rate limit on ${modelName}. Waiting ${delay/1000}s...`);
           await wait(delay);
           continue; 
         }
+
         if (msg.includes("404") || msg.includes("not found")) {
           console.warn(`⚠️ ${modelName} not found. Skipping...`);
           break; 
         }
+        
+        console.warn(`❌ Error on ${modelName}: ${msg}. Switching...`);
         break;
       }
     }
   }
+  
   throw lastError || new Error("All models failed.");
 }
 
-// ---------------------------------------------------------
-// BRAIN 1: Synthesize Workload (God Mode)
-// ---------------------------------------------------------
+export async function smartParseSlack(
+  rawMessages: any[], 
+  availableProjects: string[]
+): Promise<Record<string, ParsedMessage>> {
+  return {};
+}
+
 export async function synthesizeWorkload(
   activeSignals: any[], 
   archivedContext: any[],
@@ -105,9 +117,6 @@ export async function synthesizeWorkload(
   }
 }
 
-// ---------------------------------------------------------
-// BRAIN 2: Single Signal Analysis
-// ---------------------------------------------------------
 export async function analyzeSignal(
   slackMessage: string, 
   availableProjects: string[]
