@@ -4,7 +4,7 @@ import { TaskCard } from "./components/TaskCard";
 import { fetchSlackSignals, fetchRichSignals } from "./adapters/slack"; 
 import { fetchAsanaTasks, completeAsanaTask, getProjectList, createAsanaTaskWithProject, createAsanaSubtask } from "./adapters/asana";
 import { analyzeSignal, synthesizeWorkload, ProposedTask, AiSuggestion } from "./adapters/gemini"; 
-import { RefreshCw, LayoutTemplate, Sparkles, X, Check, Inbox, Filter, BrainCircuit, Calendar } from "lucide-react"; 
+import { RefreshCw, LayoutTemplate, Sparkles, X, Check, Inbox, Filter, BrainCircuit, Calendar, Trash2, RotateCcw } from "lucide-react"; 
 import "./App.css";
 
 type TimeRange = 'today' | '3days' | 'week' | '2weeks' | 'month' | 'year' | 'custom';
@@ -37,7 +37,21 @@ function App() {
     const current = getArchivedIds();
     localStorage.setItem("meta_archived_ids", JSON.stringify([...current, id]));
   };
+  
+  // Save filters on change
   useEffect(() => { localStorage.setItem("meta_blocked_filters", JSON.stringify(blockedFilters)); }, [blockedFilters]);
+
+  // HELPERS
+  const clearArchive = () => {
+    if (confirm("Are you sure you want to un-archive all messages?")) {
+        localStorage.removeItem("meta_archived_ids");
+        sync(); 
+    }
+  };
+  
+  const clearFilters = () => {
+      setBlockedFilters([]); // Reset to show everything
+  };
 
   const calculateStartDate = (): Date | undefined => {
     const now = new Date();
@@ -59,13 +73,24 @@ function App() {
     const archived = getArchivedIds();
     const startDate = calculateStartDate();
 
+    console.log(`🔄 Syncing... (Archived: ${archived.length}, Blocked Filters: ${blockedFilters.length})`);
+
     const [slackData, asanaData] = await Promise.allSettled([
       fetchSlackSignals(startDate),
       fetchAsanaTasks()
     ]);
     
     if (slackData.status === 'fulfilled') {
+      const rawCount = slackData.value.length;
+      // 1. Filter Archive
       const newSlackTasks = slackData.value.filter(t => !archived.includes(t.id));
+      
+      console.log(`📊 Adapter Report:
+        - Fetched: ${rawCount}
+        - Archived: ${rawCount - newSlackTasks.length}
+        - Passed to UI: ${newSlackTasks.length}
+      `);
+      
       setSlackTasks(newSlackTasks);
     }
     if (asanaData.status === 'fulfilled') setAsanaTasks(asanaData.value);
@@ -75,6 +100,7 @@ function App() {
 
   useEffect(() => { sync(); }, [timeRange, customDate]);
 
+  // ACTIONS
   const handleArchive = (id: string) => { archiveId(id); setSlackTasks(prev => prev.filter(t => t.id !== id)); };
 
   const handleCompleteTask = async (taskId: string) => {
@@ -118,29 +144,24 @@ function App() {
   const handleSynthesize = async () => {
     setLoading(true);
     const startDate = calculateStartDate();
-    const signals = await fetchRichSignals(startDate); // Gets Deep Data
+    const signals = await fetchRichSignals(startDate);
     
-    if (signals.length === 0) { 
-        alert("No Slack signals found in this time range."); 
-        setLoading(false); 
-        return; 
-    }
+    if (signals.length === 0) { alert("No Slack signals found."); setLoading(false); return; }
 
-    // Apply Client Filters to Synthesis Data
     const filteredSignals = signals.filter(s => {
         const channelKey = `channel:${s.channelName}`;
-        return !blockedFilters.includes(channelKey);
+        const authorKey = `author:${s.mainMessage.username || s.mainMessage.user}`;
+        return !blockedFilters.includes(channelKey) && !blockedFilters.includes(authorKey);
     });
 
     if (filteredSignals.length === 0) {
-        alert("All signals filtered out.");
+        alert("All signals were filtered out by your settings.");
         setLoading(false);
         return;
     }
 
     const projects = await getProjectList();
-    const plan = await synthesizeWorkload(filteredSignals, [], projects); // Sends to Gemini
-    
+    const plan = await synthesizeWorkload(filteredSignals, [], projects);
     setSynthesisResults(plan);
     setLoading(false);
   };
@@ -164,6 +185,7 @@ function App() {
     setAsanaTasks(newAsanaTasks);
   };
 
+  // --- FILTERS & RENDER ---
   const toggleFilter = (key: string) => {
     setBlockedFilters(prev => prev.includes(key) ? prev.filter(f => f !== key) : [...prev, key]);
   };
@@ -186,10 +208,24 @@ function App() {
     return { channels: Array.from(channels).sort(), authors: Array.from(authors).sort() };
   }, [slackTasks]);
 
-  const visibleSlackTasks = slackTasks.filter(t => 
-    !blockedFilters.includes(`channel:${t.metadata.channel}`) && 
-    !blockedFilters.includes(`author:${t.metadata.author}`)
-  );
+  // THE FILTER LOGIC (With Debugging)
+  const visibleSlackTasks = slackTasks.filter(t => {
+    const channelKey = `channel:${t.metadata.channel}`;
+    const authorKey = `author:${t.metadata.author}`;
+    const isBlocked = blockedFilters.includes(channelKey) || blockedFilters.includes(authorKey);
+    
+    if (isBlocked) {
+        // console.log(`Hidden by filter: ${t.title} (${channelKey} / ${authorKey})`);
+    }
+    return !isBlocked;
+  });
+  
+  // Report discrepancy if meaningful
+  useEffect(() => {
+      if (slackTasks.length > 0 && visibleSlackTasks.length !== slackTasks.length) {
+          console.log(`⚠️ UI Filter Report: Hiding ${slackTasks.length - visibleSlackTasks.length} tasks due to active filters.`);
+      }
+  }, [slackTasks, visibleSlackTasks]);
 
   const renderGroupedList = (tasks: UnifiedTask[], getProject: (t: UnifiedTask) => string, renderAction: (t: UnifiedTask) => React.ReactNode) => {
     const groups: Record<string, UnifiedTask[]> = {};
@@ -205,10 +241,12 @@ function App() {
   return (
     <div className="min-h-screen p-8 text-gray-900 font-sans bg-gray-50 relative">
       <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
+        
         <div className="flex items-center gap-3">
             <div className="p-2 bg-black rounded-lg"><LayoutTemplate className="text-white" size={24} /></div>
             <div><h1 className="text-2xl font-bold tracking-tight text-gray-900">Meta-Layer</h1></div>
         </div>
+        
         <div className="flex flex-wrap gap-2 items-center">
             <div className="flex items-center gap-2 bg-white border border-gray-200 px-3 py-2 rounded-lg shadow-sm">
                 <Calendar size={16} className="text-gray-500" />
@@ -223,11 +261,24 @@ function App() {
                 </select>
                 {timeRange === 'custom' && <input type="date" value={customDate} onChange={(e) => setCustomDate(e.target.value)} className="ml-2 border border-gray-300 rounded px-2 py-1 text-xs" />}
             </div>
+            
+            {/* CLEAR ARCHIVE BUTTON */}
+            <button onClick={clearArchive} className="flex items-center gap-2 bg-white border border-gray-200 text-gray-500 px-3 py-2 rounded-lg hover:bg-red-50 hover:text-red-600 transition shadow-sm" title="Reset Archive"><Trash2 size={16} /></button>
+
+            {/* CLEAR FILTERS BUTTON (Only shows if filters are active) */}
+            {blockedFilters.length > 0 && (
+                <button onClick={clearFilters} className="flex items-center gap-2 bg-purple-100 border border-purple-200 text-purple-700 px-3 py-2 rounded-lg hover:bg-purple-200 transition shadow-sm font-medium text-sm" title="Clear All Filters">
+                    <RotateCcw size={16} /> Clear ({blockedFilters.length})
+                </button>
+            )}
+
             <button onClick={handleSynthesize} className="flex items-center gap-2 bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition shadow-sm font-bold text-sm"><BrainCircuit size={16} />{loading ? "Thinking..." : "Synthesize Plan"}</button>
-            <button onClick={() => setShowFilterModal(true)} className={`flex items-center gap-2 border px-3 py-2 rounded-lg transition shadow-sm font-medium text-sm ${blockedFilters.length > 0 ? 'bg-purple-50 border-purple-200 text-purple-700' : 'bg-white border-gray-200'}`}><Filter size={16} /> Filters {blockedFilters.length > 0 && `(${blockedFilters.length})`}</button>
+            <button onClick={() => setShowFilterModal(true)} className={`flex items-center gap-2 border px-3 py-2 rounded-lg transition shadow-sm font-medium text-sm ${blockedFilters.length > 0 ? 'bg-purple-50 border-purple-200 text-purple-700' : 'bg-white border-gray-200'}`}><Filter size={16} /> Filters</button>
             <button onClick={sync} className="flex items-center gap-2 bg-white border border-gray-200 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-50 transition shadow-sm font-medium text-sm"><RefreshCw size={16} className={loading ? "animate-spin" : ""} />Sync</button>
         </div>
       </div>
+
+      {/* ... (Grid Layout and Modals remain the same) ... */}
       <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-8">
          <div className="flex flex-col gap-4">
             <h2 className="text-sm font-bold text-gray-500 uppercase tracking-wider flex items-center gap-2">Incoming Signals <span className="bg-purple-100 text-purple-700 text-xs px-2 py-0.5 rounded-full">{visibleSlackTasks.length}</span></h2>
@@ -241,37 +292,7 @@ function App() {
             {renderGroupedList(asanaTasks, (t) => t.metadata.project || "My Tasks", (t) => <TaskCard key={t.id} task={t} onComplete={handleCompleteTask} />)}
          </div>
       </div>
-      {synthesisResults && (
-        <div className="fixed inset-0 bg-gray-900/90 backdrop-blur-sm flex items-center justify-center z-50 p-6">
-          <div className="bg-gray-50 rounded-2xl shadow-2xl max-w-5xl w-full h-[85vh] flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">
-            <div className="bg-white p-6 border-b flex justify-between items-center">
-              <h2 className="text-2xl font-bold flex items-center gap-2"><Sparkles className="text-purple-600" /> Proposed Project Plan</h2>
-              <button onClick={() => setSynthesisResults(null)} className="p-2 hover:bg-gray-100 rounded-full"><X /></button>
-            </div>
-            <div className="flex-1 overflow-y-auto p-6 space-y-6">
-              {synthesisResults.map((task, idx) => (
-                <div key={idx} className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition">
-                  <div className="flex justify-between items-start">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-3 mb-2">
-                        <span className="bg-blue-100 text-blue-800 text-xs font-bold px-2 py-1 rounded uppercase tracking-wide">{task.project}</span>
-                        <h3 className="text-xl font-bold text-gray-900">{task.title}</h3>
-                      </div>
-                      <p className="text-gray-600 mb-4">{task.description}</p>
-                      <div className="bg-gray-50 p-4 rounded-lg mb-4">
-                        <h4 className="text-xs font-bold text-gray-400 uppercase mb-2">Recommended Subtasks</h4>
-                        <ul className="space-y-2">{task.subtasks.map((sub, i) => <li key={i} className="flex items-center gap-2 text-sm text-gray-700"><div className="w-1.5 h-1.5 bg-gray-400 rounded-full"></div>{sub}</li>)}</ul>
-                      </div>
-                      <div className="text-xs text-gray-400 italic">Sources: {task.citations.join(" • ")}</div>
-                    </div>
-                    <button onClick={() => handleApproveSynthesizedTask(task, idx)} className="ml-6 bg-black text-white px-4 py-2 rounded-lg font-bold hover:bg-gray-800 transition flex items-center gap-2 whitespace-nowrap"><Check size={16} /> Accept</button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
+
       {showFilterModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden animate-in fade-in zoom-in duration-200">
@@ -294,7 +315,7 @@ function App() {
                     const isBlocked = blockedFilters.includes(key);
                     return (
                       <label key={key} className="flex items-center justify-between p-3 rounded-lg border border-gray-100 hover:bg-gray-50 cursor-pointer">
-                        <span className="font-medium text-gray-700">{channel}</span>
+                        <span className="font-medium text-gray-700">{channel.startsWith('📂') ? channel : `#${channel}`}</span>
                         <input type="checkbox" checked={!isBlocked} onChange={() => toggleFilter(key)} className="w-5 h-5 rounded border-gray-300 text-purple-600 focus:ring-purple-500" />
                       </label>
                     );
@@ -326,6 +347,40 @@ function App() {
           </div>
         </div>
       )}
+
+      {/* Synthesis Modal & Review Modal remain the same as previous version... (Included in full code block) */}
+      {synthesisResults && (
+        <div className="fixed inset-0 bg-gray-900/90 backdrop-blur-sm flex items-center justify-center z-50 p-6">
+          <div className="bg-gray-50 rounded-2xl shadow-2xl max-w-5xl w-full h-[85vh] flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">
+            <div className="bg-white p-6 border-b flex justify-between items-center">
+              <h2 className="text-2xl font-bold flex items-center gap-2"><Sparkles className="text-purple-600" /> Proposed Project Plan</h2>
+              <button onClick={() => setSynthesisResults(null)} className="p-2 hover:bg-gray-100 rounded-full"><X /></button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+              {synthesisResults.map((task, idx) => (
+                <div key={idx} className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition">
+                  <div className="flex justify-between items-start">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-3 mb-2">
+                        <span className="bg-blue-100 text-blue-800 text-xs font-bold px-2 py-1 rounded uppercase tracking-wide">{task.project}</span>
+                        <h3 className="text-xl font-bold text-gray-900">{task.title}</h3>
+                      </div>
+                      <p className="text-gray-600 mb-4">{task.description}</p>
+                      <div className="bg-gray-50 p-4 rounded-lg mb-4">
+                        <h4 className="text-xs font-bold text-gray-400 uppercase mb-2">Recommended Subtasks</h4>
+                        <ul className="space-y-2">{task.subtasks.map((sub, i) => <li key={i} className="flex items-center gap-2 text-sm text-gray-700"><div className="w-1.5 h-1.5 bg-gray-400 rounded-full"></div>{sub}</li>)}</ul>
+                      </div>
+                      <div className="text-xs text-gray-400 italic">Sources: {task.citations.join(" • ")}</div>
+                    </div>
+                    <button onClick={() => handleApproveSynthesizedTask(task, idx)} className="ml-6 bg-black text-white px-4 py-2 rounded-lg font-bold hover:bg-gray-800 transition flex items-center gap-2 whitespace-nowrap"><Check size={16} /> Accept</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       {reviewState && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden animate-in fade-in zoom-in duration-200">
