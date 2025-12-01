@@ -1,14 +1,19 @@
 import { fetch } from '@tauri-apps/plugin-http';
 import { UnifiedTask } from '../types/unified';
+import { smartParseSlack } from './gemini'; 
+import { getProjectList } from './asana'; 
 
 // SECURE: Load from environment variable
 const SLACK_TOKEN = import.meta.env.VITE_SLACK_TOKEN;
 
-// Safety Cap: Fetch up to 500 messages
 const MAX_PAGES = 10; 
 
-// --- CONFIG: Channel -> Project Mapping ---
+// CONFIG: Specific Channel IDs to always import
+const EXTRA_CHANNELS: string[] = ["C0A0JDYA3SR"];
+
+// CONFIG: Channel ID -> Project Name Mapping
 const PROJECT_MAP: Record<string, string> = {
+  "C0A0JDYA3SR": "My Private Notes",
   "team-research-evaluation": "Research & Evaluation",
   "mpdm-donnat--meg--jeremy-1": "Leadership Team",
   "mpdm-thomas--salma--jeremy-1": "Data Team",
@@ -50,7 +55,15 @@ function extractLink(match: any): string {
   const textLink = match.text ? match.text.match(/<(https?:\/\/[^|>]+)/) : null;
   if (textLink) return textLink[1];
 
-  return match.permalink;
+  if (match.permalink) return match.permalink;
+
+  if (match.ts && match.channel) {
+      const cleanTs = match.ts.replace('.', '');
+      const channelId = typeof match.channel === 'string' ? match.channel : match.channel.id;
+      return `slack://channel?team=${match.team || 'T09SE32ER'}&id=${channelId}&message=${cleanTs}`;
+  }
+
+  return "";
 }
 
 // --- API HELPERS ---
@@ -77,6 +90,29 @@ async function hydrateMessage(channelId: string, ts: string): Promise<any> {
   } catch (e) { return null; }
 }
 
+async function fetchChannelHistory(channelId: string, startDate?: Date): Promise<any[]> {
+  try {
+    let url = `https://slack.com/api/conversations.history?channel=${channelId}&limit=50`;
+    if (startDate) {
+        const oldest = (startDate.getTime() / 1000).toString();
+        url += `&oldest=${oldest}`;
+    }
+
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${SLACK_TOKEN}` }
+    });
+    
+    const data = await response.json() as any;
+    if (!data.ok) return [];
+
+    return data.messages.map((m: any) => ({
+        ...m,
+        channel: { id: channelId, name: PROJECT_MAP[channelId] || "Private Note" }
+    }));
+  } catch (e) { return []; }
+}
+
 async function fetchThread(channelId: string, ts: string): Promise<any[]> {
   try {
     const response = await fetch(`https://slack.com/api/conversations.replies?channel=${channelId}&ts=${ts}&limit=10`, {
@@ -90,11 +126,12 @@ async function fetchThread(channelId: string, ts: string): Promise<any[]> {
 // --- PARSER ---
 function parseMessage(match: any): UnifiedTask {
   const msgId = match.ts.replace('.', '');
-  const rawChannel = match.channel.name || match.channel.id;
+  const rawChannelId = typeof match.channel === 'string' ? match.channel : match.channel.id;
+  const rawChannelName = typeof match.channel === 'string' ? match.channel : (match.channel.name || match.channel.id);
   
-  let project = PROJECT_MAP[rawChannel] || PROJECT_MAP[match.channel.id];
+  let project = PROJECT_MAP[rawChannelName] || PROJECT_MAP[rawChannelId];
   if (!project) {
-      project = match.channel.is_im ? "Direct Messages" : `#${rawChannel}`;
+      project = (match.channel.is_im || match.channel === 'D') ? "Direct Messages" : `#${rawChannelName}`;
   }
 
   let title = cleanSlackText(match.text);
@@ -158,7 +195,7 @@ function parseMessage(match: any): UnifiedTask {
     metadata: {
       author: author,
       channel: project,
-      type: match.channel.is_im ? 'dm' : 'mention'
+      type: match.channel?.is_im ? 'dm' : 'mention'
     }
   };
 }
@@ -171,42 +208,50 @@ export async function fetchSlackSignals(startDate?: Date): Promise<UnifiedTask[]
     const userId = await getMyUserId();
     if (!userId) return [];
 
-    // VACUUM QUERY: "to:me" only (client-side filters handle date/noise)
-    let queryString = `to:${userId}`;
+    // Start Parallel Requests
+    const searchPromise = (async () => {
+        let queryString = `(<@${userId}> OR to:${userId}) -from:asana`;
+        const encodedQuery = encodeURIComponent(queryString);
+        
+        let allMatches: any[] = [];
+        let page = 1;
+
+        while (page <= MAX_PAGES) {
+            const response = await fetch(`https://slack.com/api/search.messages?query=${encodedQuery}&sort=timestamp&sort_dir=desc&count=100&page=${page}`, {
+                headers: { 'Authorization': `Bearer ${SLACK_TOKEN}` },
+            });
+
+            if (!response.ok) break;
+            const data = await response.json() as any;
+            if (!data.ok || !data.messages || !data.messages.matches) break;
+
+            allMatches = [...allMatches, ...data.messages.matches];
+            if (page >= data.messages.paging.pages) break;
+            page++;
+        }
+        return allMatches;
+    })();
+
+    const directHistoryPromises = EXTRA_CHANNELS.map(id => fetchChannelHistory(id, startDate));
     
-    // NOTE: We do NOT add "after:date" here to avoid API bugs.
-    const encodedQuery = encodeURIComponent(queryString);
+    const [searchResults, ...directResults] = await Promise.all([searchPromise, ...directHistoryPromises]);
+    const directMatches = directResults.flat();
+    const combinedMatches = [...searchResults, ...directMatches];
     
-    let allMatches: any[] = [];
-    let page = 1;
-
-    console.log("📥 Starting Wide Slack Fetch...");
-
-    while (page <= MAX_PAGES) {
-        const response = await fetch(`https://slack.com/api/search.messages?query=${encodedQuery}&sort=timestamp&sort_dir=desc&count=100&page=${page}`, {
-            headers: { 'Authorization': `Bearer ${SLACK_TOKEN}` },
-        });
-
-        if (!response.ok) break;
-        const data = await response.json() as any;
-        if (!data.ok || !data.messages || !data.messages.matches) break;
-
-        allMatches = [...allMatches, ...data.messages.matches];
-        if (page >= data.messages.paging.pages) break;
-        page++;
-    }
-
-    console.log(`✅ Total Raw Messages: ${allMatches.length}`);
+    // Deduplicate
+    const seenIds = new Set();
+    const uniqueMatches = combinedMatches.filter(m => {
+        if (seenIds.has(m.ts)) return false;
+        seenIds.add(m.ts);
+        return true;
+    });
 
     // Client-Side Filtering
-    const filteredMatches = allMatches.filter((match: any) => {
+    const filteredMatches = uniqueMatches.filter((match: any) => {
         const rawJson = JSON.stringify(match).toLowerCase();
         const msgDate = new Date(parseFloat(match.ts) * 1000);
 
-        // Date Filter
         if (startDate && msgDate < startDate) return false;
-        
-        // Noise Filters
         if (match.username === 'asana') return false;
         if (rawJson.includes("marked a thread as resolved")) return false;
         if (match.channel && match.channel.name && match.channel.name.toLowerCase().startsWith("fun")) return false;
@@ -214,16 +259,19 @@ export async function fetchSlackSignals(startDate?: Date): Promise<UnifiedTask[]
         return true;
     });
 
-    console.log(`✅ Filtered Count: ${filteredMatches.length}`);
-
     // Hydrate Ghosts
     const rawMatches = await Promise.all(filteredMatches.map(async (match: any) => {
       if (!match.text || match.text === "") {
-        const hydrated = await hydrateMessage(match.channel.id, match.ts);
+        const channelId = typeof match.channel === 'string' ? match.channel : match.channel.id;
+        const hydrated = await hydrateMessage(channelId, match.ts);
         if (hydrated) return { ...match, ...hydrated };
       }
       return match;
     }));
+
+    // Optional: AI Categorization (if needed, currently using deterministic map)
+    // const projects = await getProjectList(); 
+    // const aiParsedData = await smartParseSlack(rawMatches.slice(0, 50), projects);
 
     return rawMatches.map(parseMessage);
 
@@ -238,44 +286,20 @@ export async function fetchSlackSignals(startDate?: Date): Promise<UnifiedTask[]
 // ---------------------------------------------------------
 export async function fetchRichSignals(startDate?: Date): Promise<any[]> {
   try {
-    const userId = await getMyUserId();
-    if (!userId) return [];
-
-    // Same Vacuum Query for consistency
-    let queryString = `to:${userId}`;
-    const encodedQuery = encodeURIComponent(queryString);
+    // Reuse main fetcher to get the list
+    const tasks = await fetchSlackSignals(startDate); 
     
-    const response = await fetch(`https://slack.com/api/search.messages?query=${encodedQuery}&sort=timestamp&sort_dir=desc&count=50`, {
-      headers: { 'Authorization': `Bearer ${SLACK_TOKEN}` },
-    });
-
-    if (!response.ok) return [];
-    const data = await response.json() as any;
-    if (!data.ok || !data.messages) return [];
-
-    // Filter matches before fetching threads to save bandwidth
-    const filteredMatches = data.messages.matches.filter((match: any) => {
-        const rawJson = JSON.stringify(match).toLowerCase();
-        const msgDate = new Date(parseFloat(match.ts) * 1000);
-
-        if (startDate && msgDate < startDate) return false;
-        if (match.username === 'asana') return false;
-        if (rawJson.includes("marked a thread as resolved")) return false;
-        return true;
-    });
-
-    const richData = await Promise.all(filteredMatches.map(async (match: any) => {
-      let thread = [];
-      if (match.reply_count && match.reply_count > 0) {
-        thread = await fetchThread(match.channel.id, match.ts);
-      }
-      return { 
-          id: `slack-${match.ts}`, 
-          mainMessage: match, 
-          thread: thread, 
-          source: 'slack',
-          channelName: match.channel.name 
-      };
+    // Fetch threads for valid tasks
+    const richData = await Promise.all(tasks.map(async (task: any) => {
+        // Note: We reconstruct the object for AI. 
+        // Ideally we'd fetch thread here, but to save limits we just pass main text.
+        return { 
+            id: task.id, 
+            mainMessage: { text: task.title, user: task.metadata.author }, 
+            thread: [], 
+            source: 'slack',
+            channelName: task.metadata.channel 
+        };
     }));
 
     return richData;
