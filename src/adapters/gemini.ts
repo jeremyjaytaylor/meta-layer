@@ -10,10 +10,12 @@ export interface ProposedTask { title: string; description: string; project: str
 export interface AiSuggestion { title: string; projectName: string; reasoning: string; }
 
 const MODEL_CASCADE = [
-  "gemini-2.5-flash",    
+  "gemini-2.5-flash",
   "gemini-2.5-pro",
   "gemini-2.0-flash-exp",
-  "gemini-1.5-flash"
+  "gemini-1.5-flash",
+  "gemini-1.5-pro",
+  "gemini-pro"
 ];
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -37,23 +39,34 @@ async function runWithCascade(prompt: string, maxRetriesPerModel: number): Promi
     for (let attempt = 0; attempt <= maxRetriesPerModel; attempt++) {
       try {
         if (attempt > 0) console.log(`🔄 Retry ${attempt} on ${modelName}...`);
+        
         const result = await model.generateContent(prompt);
         const text = result.response.text();
         const cleanJson = text.replace(/```json|```/g, '').trim();
         return JSON.parse(cleanJson);
+
       } catch (error: any) {
         const msg = error.message || "";
         lastError = error;
+
         if ((msg.includes("429") || msg.includes("503")) && attempt < maxRetriesPerModel) {
-          const delay = 2000 * Math.pow(2, attempt);
+          const delay = 2000 * Math.pow(2, attempt); 
+          console.warn(`⚠️ Rate limit on ${modelName}. Waiting ${delay/1000}s...`);
           await wait(delay);
-          continue;
+          continue; 
         }
-        if (msg.includes("404") || msg.includes("not found")) break; 
+
+        if (msg.includes("404") || msg.includes("not found")) {
+          console.warn(`⚠️ ${modelName} not found. Skipping...`);
+          break; 
+        }
+        
+        console.warn(`❌ Error on ${modelName}: ${msg}. Switching...`);
         break;
       }
     }
   }
+  
   throw lastError || new Error("All models failed.");
 }
 
@@ -61,7 +74,24 @@ export async function smartParseSlack(
   rawMessages: any[], 
   availableProjects: string[]
 ): Promise<Record<string, ParsedMessage>> {
-  return {};
+  
+  if (rawMessages.length === 0) return {};
+  const minified = rawMessages.map(m => ({ id: m.ts, text: m.text }));
+
+  const prompt = `
+    You are an Organizational Assistant.
+    Assign each Slack message to the most relevant Project.
+    PROJECTS: ${JSON.stringify(availableProjects)}
+    MESSAGES: ${JSON.stringify(minified)}
+    INSTRUCTIONS: 1. Match to Project. 2. Default "Inbox". 3. Return JSON Object mapped by ID.
+    OUTPUT JSON: { "170983.123": { "suggestedProject": "Engineering" } }
+  `;
+
+  try {
+    return await runWithCascade(prompt, 0); 
+  } catch (e) {
+    return {};
+  }
 }
 
 export async function synthesizeWorkload(
@@ -74,14 +104,17 @@ export async function synthesizeWorkload(
 
   const prompt = `
     You are a Chief of Staff. Synthesize these Slack signals into a Project Plan.
+    
     INPUTS:
     1. SIGNALS: ${JSON.stringify(cleanSignals)}
     2. PROJECTS: ${JSON.stringify(availableProjects)}
+
     INSTRUCTIONS:
     1. Cluster related threads into Major Tasks.
     2. Ignore resolved/done items.
     3. Create subtasks for specific actions.
     4. CITE SOURCES (Who said it?).
+    
     OUTPUT JSON ARRAY:
     [
       {
@@ -112,6 +145,7 @@ export async function analyzeSignal(
     Projects: ${JSON.stringify(availableProjects)}
     Output JSON Array: [{ "title": "...", "projectName": "...", "reasoning": "..." }]
   `;
+
   try {
     return await runWithCascade(prompt, 1);
   } catch (e) {
