@@ -5,7 +5,7 @@ import { UnifiedTask } from '../types/unified';
 const SLACK_TOKEN = import.meta.env.VITE_SLACK_TOKEN;
 
 // Safety Cap: Fetch up to 500 messages
-const MAX_PAGES = 5; 
+const MAX_PAGES = 10; 
 
 // --- CONFIG: Channel -> Project Mapping ---
 const PROJECT_MAP: Record<string, string> = {
