@@ -10,7 +10,12 @@ import "./App.css";
 type TimeRange = 'today' | '3days' | 'week' | '2weeks' | 'month' | 'year' | 'custom';
 
 function App() {
-  const [slackTasks, setSlackTasks] = useState<UnifiedTask[]>([]);
+  // Initialize from LocalStorage (Cache Persistence)
+  const [slackTasks, setSlackTasks] = useState<UnifiedTask[]>(() => {
+      const cached = localStorage.getItem("meta_slack_cache");
+      return cached ? JSON.parse(cached) : [];
+  });
+
   const [asanaTasks, setAsanaTasks] = useState<UnifiedTask[]>([]);
   const [loading, setLoading] = useState(false);
   const [analyzingId, setAnalyzingId] = useState<string | null>(null);
@@ -38,8 +43,10 @@ function App() {
     localStorage.setItem("meta_archived_ids", JSON.stringify([...current, id]));
   };
   
-  // Save filters on change
   useEffect(() => { localStorage.setItem("meta_blocked_filters", JSON.stringify(blockedFilters)); }, [blockedFilters]);
+  
+  // NEW: Save Slack tasks to cache whenever they update
+  useEffect(() => { localStorage.setItem("meta_slack_cache", JSON.stringify(slackTasks)); }, [slackTasks]);
 
   // HELPERS
   const clearArchive = () => {
@@ -50,7 +57,7 @@ function App() {
   };
   
   const clearFilters = () => {
-      setBlockedFilters([]); // Reset to show everything
+      setBlockedFilters([]); 
   };
 
   const calculateStartDate = (): Date | undefined => {
@@ -73,24 +80,16 @@ function App() {
     const archived = getArchivedIds();
     const startDate = calculateStartDate();
 
-    console.log(`🔄 Syncing... (Archived: ${archived.length}, Blocked Filters: ${blockedFilters.length})`);
+    console.log(`🔄 Syncing... Passing ${slackTasks.length} cached tasks.`);
 
     const [slackData, asanaData] = await Promise.allSettled([
-      fetchSlackSignals(startDate),
+      fetchSlackSignals(startDate, slackTasks), // Pass existing cache!
       fetchAsanaTasks()
     ]);
     
     if (slackData.status === 'fulfilled') {
       const rawCount = slackData.value.length;
-      // 1. Filter Archive
       const newSlackTasks = slackData.value.filter(t => !archived.includes(t.id));
-      
-      console.log(`📊 Adapter Report:
-        - Fetched: ${rawCount}
-        - Archived: ${rawCount - newSlackTasks.length}
-        - Passed to UI: ${newSlackTasks.length}
-      `);
-      
       setSlackTasks(newSlackTasks);
     }
     if (asanaData.status === 'fulfilled') setAsanaTasks(asanaData.value);
@@ -100,6 +99,7 @@ function App() {
 
   useEffect(() => { sync(); }, [timeRange, customDate]);
 
+  // ... (Rest of your Actions / AI / Render Logic remains exactly the same) ...
   // ACTIONS
   const handleArchive = (id: string) => { archiveId(id); setSlackTasks(prev => prev.filter(t => t.id !== id)); };
 
@@ -146,7 +146,11 @@ function App() {
     const startDate = calculateStartDate();
     const signals = await fetchRichSignals(startDate);
     
-    if (signals.length === 0) { alert("No Slack signals found."); setLoading(false); return; }
+    if (signals.length === 0) { 
+        alert("No Slack signals found in this time range."); 
+        setLoading(false); 
+        return; 
+    }
 
     const filteredSignals = signals.filter(s => {
         const channelKey = `channel:${s.channelName}`;
@@ -155,13 +159,14 @@ function App() {
     });
 
     if (filteredSignals.length === 0) {
-        alert("All signals were filtered out by your settings.");
+        alert("All signals were filtered out.");
         setLoading(false);
         return;
     }
 
     const projects = await getProjectList();
     const plan = await synthesizeWorkload(filteredSignals, [], projects);
+    
     setSynthesisResults(plan);
     setLoading(false);
   };
@@ -185,7 +190,6 @@ function App() {
     setAsanaTasks(newAsanaTasks);
   };
 
-  // --- FILTERS & RENDER ---
   const toggleFilter = (key: string) => {
     setBlockedFilters(prev => prev.includes(key) ? prev.filter(f => f !== key) : [...prev, key]);
   };
@@ -208,24 +212,11 @@ function App() {
     return { channels: Array.from(channels).sort(), authors: Array.from(authors).sort() };
   }, [slackTasks]);
 
-  // THE FILTER LOGIC (With Debugging)
   const visibleSlackTasks = slackTasks.filter(t => {
     const channelKey = `channel:${t.metadata.channel}`;
     const authorKey = `author:${t.metadata.author}`;
-    const isBlocked = blockedFilters.includes(channelKey) || blockedFilters.includes(authorKey);
-    
-    if (isBlocked) {
-        // console.log(`Hidden by filter: ${t.title} (${channelKey} / ${authorKey})`);
-    }
-    return !isBlocked;
+    return !blockedFilters.includes(channelKey) && !blockedFilters.includes(authorKey);
   });
-  
-  // Report discrepancy if meaningful
-  useEffect(() => {
-      if (slackTasks.length > 0 && visibleSlackTasks.length !== slackTasks.length) {
-          console.log(`⚠️ UI Filter Report: Hiding ${slackTasks.length - visibleSlackTasks.length} tasks due to active filters.`);
-      }
-  }, [slackTasks, visibleSlackTasks]);
 
   const renderGroupedList = (tasks: UnifiedTask[], getProject: (t: UnifiedTask) => string, renderAction: (t: UnifiedTask) => React.ReactNode) => {
     const groups: Record<string, UnifiedTask[]> = {};
@@ -262,10 +253,8 @@ function App() {
                 {timeRange === 'custom' && <input type="date" value={customDate} onChange={(e) => setCustomDate(e.target.value)} className="ml-2 border border-gray-300 rounded px-2 py-1 text-xs" />}
             </div>
             
-            {/* CLEAR ARCHIVE BUTTON */}
             <button onClick={clearArchive} className="flex items-center gap-2 bg-white border border-gray-200 text-gray-500 px-3 py-2 rounded-lg hover:bg-red-50 hover:text-red-600 transition shadow-sm" title="Reset Archive"><Trash2 size={16} /></button>
 
-            {/* CLEAR FILTERS BUTTON (Only shows if filters are active) */}
             {blockedFilters.length > 0 && (
                 <button onClick={clearFilters} className="flex items-center gap-2 bg-purple-100 border border-purple-200 text-purple-700 px-3 py-2 rounded-lg hover:bg-purple-200 transition shadow-sm font-medium text-sm" title="Clear All Filters">
                     <RotateCcw size={16} /> Clear ({blockedFilters.length})
@@ -278,7 +267,6 @@ function App() {
         </div>
       </div>
 
-      {/* ... (Grid Layout and Modals remain the same) ... */}
       <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-8">
          <div className="flex flex-col gap-4">
             <h2 className="text-sm font-bold text-gray-500 uppercase tracking-wider flex items-center gap-2">Incoming Signals <span className="bg-purple-100 text-purple-700 text-xs px-2 py-0.5 rounded-full">{visibleSlackTasks.length}</span></h2>
@@ -315,7 +303,7 @@ function App() {
                     const isBlocked = blockedFilters.includes(key);
                     return (
                       <label key={key} className="flex items-center justify-between p-3 rounded-lg border border-gray-100 hover:bg-gray-50 cursor-pointer">
-                        <span className="font-medium text-gray-700">{channel.startsWith('📂') ? channel : `#${channel}`}</span>
+                        <span className="font-medium text-gray-700">{channel}</span>
                         <input type="checkbox" checked={!isBlocked} onChange={() => toggleFilter(key)} className="w-5 h-5 rounded border-gray-300 text-purple-600 focus:ring-purple-500" />
                       </label>
                     );
@@ -348,7 +336,7 @@ function App() {
         </div>
       )}
 
-      {/* Synthesis Modal & Review Modal remain the same as previous version... (Included in full code block) */}
+      {/* ... Synthesis Modals ... */}
       {synthesisResults && (
         <div className="fixed inset-0 bg-gray-900/90 backdrop-blur-sm flex items-center justify-center z-50 p-6">
           <div className="bg-gray-50 rounded-2xl shadow-2xl max-w-5xl w-full h-[85vh] flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">

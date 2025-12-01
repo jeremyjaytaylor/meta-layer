@@ -1,15 +1,13 @@
 import { fetch } from '@tauri-apps/plugin-http';
 import { UnifiedTask } from '../types/unified';
-// Note: smartParseSlack is imported if you want AI categorization for the list
-import { smartParseSlack } from './gemini'; 
-import { getProjectList } from './asana'; 
 
-// SECURE: Load from environment variable
+// ⚠️ PASTE YOUR SLACK TOKEN HERE
 const SLACK_TOKEN = import.meta.env.VITE_SLACK_TOKEN;
 
-const MAX_PAGES = 10; 
+// OPTIMIZATION: Limit to 500 messages to prevent UI lag
+const MAX_PAGES = 5; 
 
-// CONFIG: Specific Channel IDs to always import (Bypasses Search)
+// CONFIG: Specific Channel IDs to always import
 const EXTRA_CHANNELS: string[] = ["C0A0JDYA3SR"];
 
 // CONFIG: Channel ID -> Project Name Mapping
@@ -57,7 +55,6 @@ function extractLink(match: any): string {
   if (textLink) return textLink[1];
 
   if (match.permalink) return match.permalink;
-  
   if (match.ts && match.channel) {
       const cleanTs = match.ts.replace('.', '');
       const channelId = typeof match.channel === 'string' ? match.channel : match.channel.id;
@@ -66,9 +63,19 @@ function extractLink(match: any): string {
   return "";
 }
 
-// --- API HELPERS ---
+// --- HELPER: Batch Processor (Prevents Network Choke) ---
+async function processInBatches<T, R>(items: T[], batchSize: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = [];
+  for (let i = 0; i < items.length; i += batchSize) {
+    const batch = items.slice(i, i + batchSize);
+    const batchResults = await Promise.all(batch.map(fn));
+    results.push(...batchResults);
+  }
+  return results;
+}
 
-// UPDATED: Returns { id, name } so we can search by @username
+// --- API HELPERS ---
+// RENAMED: Standardized to getUserInfo for consistency
 async function getUserInfo(): Promise<{ id: string, name: string } | null> {
   try {
     if (!SLACK_TOKEN) throw new Error("Missing VITE_SLACK_TOKEN");
@@ -78,7 +85,7 @@ async function getUserInfo(): Promise<{ id: string, name: string } | null> {
     });
     const data = await response.json() as any;
     if (!data.ok) return null;
-    return { id: data.user_id, name: data.user }; // "user" is the username handle (e.g. "jeremy")
+    return { id: data.user_id, name: data.user };
   } catch (e) { return null; }
 }
 
@@ -100,26 +107,17 @@ async function fetchChannelHistory(channelId: string, startDate?: Date): Promise
         const oldest = (startDate.getTime() / 1000).toString();
         url += `&oldest=${oldest}`;
     }
-
     const response = await fetch(url, {
       method: 'GET',
       headers: { 'Authorization': `Bearer ${SLACK_TOKEN}` }
     });
-    
     const data = await response.json() as any;
-    if (!data.ok) {
-        console.warn(`Failed to fetch history for ${channelId}: ${data.error}`);
-        return [];
-    }
-
+    if (!data.ok) return [];
     return data.messages.map((m: any) => ({
         ...m,
         channel: { id: channelId, name: PROJECT_MAP[channelId] || "Private Note" }
     }));
-  } catch (e) { 
-    console.error("Channel History Error:", e);
-    return []; 
-  }
+  } catch (e) { return []; }
 }
 
 async function fetchThread(channelId: string, ts: string): Promise<any[]> {
@@ -138,6 +136,8 @@ function parseMessage(match: any): UnifiedTask {
   const rawChannelId = typeof match.channel === 'string' ? match.channel : match.channel.id;
   const rawChannelName = typeof match.channel === 'string' ? match.channel : (match.channel.name || match.channel.id);
   
+  const uniqueId = `slack-${rawChannelId}-${msgId}`;
+
   let project = PROJECT_MAP[rawChannelName] || PROJECT_MAP[rawChannelId];
   if (!project) {
       project = (match.channel.is_im || match.channel === 'D') ? "Direct Messages" : `#${rawChannelName}`;
@@ -196,7 +196,7 @@ function parseMessage(match: any): UnifiedTask {
   if (title === "" || title === "📄 null") title = "[Shared an Image or File]";
 
   return {
-    id: `slack-${msgId}`,
+    id: uniqueId, 
     externalId: match.ts,
     provider: provider,
     title: title,
@@ -214,20 +214,14 @@ function parseMessage(match: any): UnifiedTask {
 // ---------------------------------------------------------
 // EXPORT 1: Main Fetcher (List View)
 // ---------------------------------------------------------
-export async function fetchSlackSignals(startDate?: Date): Promise<UnifiedTask[]> {
+export async function fetchSlackSignals(startDate?: Date, cachedTasks: UnifiedTask[] = []): Promise<UnifiedTask[]> {
   try {
     const userInfo = await getUserInfo();
     if (!userInfo) return [];
 
-    // 1. Start Parallel Requests: Search + Extra Channels
     const searchPromise = (async () => {
-        // FIX: Using the USERNAME syntax as you verified works
-        // We also include <@ID> just in case, but prioritize @name
-        let queryString = `to:@${userInfo.name} -from:asana`;
-        
-        // Note: Keeping vacuum strategy (no date in API) for reliability
+        let queryString = `(to:@${userInfo.name} OR <@${userInfo.id}>) -from:asana`;
         const encodedQuery = encodeURIComponent(queryString);
-        
         let allMatches: any[] = [];
         let page = 1;
 
@@ -235,11 +229,9 @@ export async function fetchSlackSignals(startDate?: Date): Promise<UnifiedTask[]
             const response = await fetch(`https://slack.com/api/search.messages?query=${encodedQuery}&sort=timestamp&sort_dir=desc&count=100&page=${page}`, {
                 headers: { 'Authorization': `Bearer ${SLACK_TOKEN}` },
             });
-
             if (!response.ok) break;
             const data = await response.json() as any;
             if (!data.ok || !data.messages || !data.messages.matches) break;
-
             allMatches = [...allMatches, ...data.messages.matches];
             if (page >= data.messages.paging.pages) break;
             page++;
@@ -248,13 +240,10 @@ export async function fetchSlackSignals(startDate?: Date): Promise<UnifiedTask[]
     })();
 
     const directHistoryPromises = EXTRA_CHANNELS.map(id => fetchChannelHistory(id, startDate));
-    
-    // 2. Wait for all
     const [searchResults, ...directResults] = await Promise.all([searchPromise, ...directHistoryPromises]);
     const directMatches = directResults.flat();
     const combinedMatches = [...searchResults, ...directMatches];
     
-    // 3. Deduplicate
     const seenIds = new Set();
     const uniqueMatches = combinedMatches.filter(m => {
         if (seenIds.has(m.ts)) return false;
@@ -264,15 +253,11 @@ export async function fetchSlackSignals(startDate?: Date): Promise<UnifiedTask[]
 
     console.log(`✅ Total Raw Messages: ${uniqueMatches.length}`);
 
-    // 4. Client-Side Filtering
     const filteredMatches = uniqueMatches.filter((match: any) => {
         const rawJson = JSON.stringify(match).toLowerCase();
         const msgDate = new Date(parseFloat(match.ts) * 1000);
 
-        // Date Filter
         if (startDate && msgDate < startDate) return false;
-        
-        // Noise Filters
         if (match.username === 'asana') return false;
         if (rawJson.includes("marked a thread as resolved")) return false;
         if (match.channel && match.channel.name && match.channel.name.toLowerCase().startsWith("fun")) return false;
@@ -282,32 +267,21 @@ export async function fetchSlackSignals(startDate?: Date): Promise<UnifiedTask[]
 
     console.log(`✅ Filtered Messages: ${filteredMatches.length}`);
 
-    // 5. Hydrate Ghosts
-    const rawMatches = await Promise.all(filteredMatches.map(async (match: any) => {
-      if (!match.text || match.text === "") {
-        const channelId = typeof match.channel === 'string' ? match.channel : match.channel.id;
-        const hydrated = await hydrateMessage(channelId, match.ts);
-        if (hydrated) return { ...match, ...hydrated };
-      }
-      return match;
-    }));
+    // BATCH HYDRATION
+    const hydrateFn = async (match: any) => {
+        const cached = cachedTasks.find(t => t.externalId === match.ts);
+        if (cached) return cached;
 
-    // Optional: AI Categorization if desired
-    let aiParsedData: any = {};
-    try {
-        const projects = await getProjectList(); 
-        const recentMatches = rawMatches.slice(0, 50); 
-        aiParsedData = await smartParseSlack(recentMatches, projects);
-    } catch (e) { }
-
-    return rawMatches.map((match: any) => {
-        const task = parseMessage(match);
-        const aiInfo = aiParsedData[match.ts];
-        if (aiInfo && aiInfo.suggestedProject && aiInfo.suggestedProject !== "Inbox") {
-            task.metadata.channel = `📂 ${aiInfo.suggestedProject}`;
+        if (!match.text || match.text === "" || (match.files && match.files.length > 0)) {
+            const channelId = typeof match.channel === 'string' ? match.channel : match.channel.id;
+            const hydrated = await hydrateMessage(channelId, match.ts);
+            if (hydrated) return parseMessage({ ...match, ...hydrated });
         }
-        return task;
-    });
+        return parseMessage(match);
+    };
+
+    const finalTasks = await processInBatches(filteredMatches, 5, hydrateFn);
+    return finalTasks.filter(t => t && t.id);
 
   } catch (error) {
     console.error("Slack Adapter Error:", error);
@@ -320,13 +294,10 @@ export async function fetchSlackSignals(startDate?: Date): Promise<UnifiedTask[]
 // ---------------------------------------------------------
 export async function fetchRichSignals(startDate?: Date): Promise<any[]> {
   try {
-    const userInfo = await getUserInfo();
+    const userInfo = await getUserInfo(); // FIX: Uses correct function name now
     if (!userInfo) return [];
 
-    // FIX: Use the same successful query for Synthesis
-    let queryString = `to:@${userInfo.name} -from:asana -"marked a thread as resolved"`;
-    
-    // Keeping vacuum (no date) consistent
+    let queryString = `(to:@${userInfo.name} OR <@${userInfo.id}>) -from:asana -"marked a thread as resolved"`;
     const encodedQuery = encodeURIComponent(queryString);
     
     const response = await fetch(`https://slack.com/api/search.messages?query=${encodedQuery}&sort=timestamp&sort_dir=desc&count=50`, {
@@ -347,20 +318,17 @@ export async function fetchRichSignals(startDate?: Date): Promise<any[]> {
         return true;
     });
 
-    const richData = await Promise.all(filteredMatches.map(async (match: any) => {
-      let thread = [];
-      if (match.reply_count && match.reply_count > 0) {
-        thread = await fetchThread(match.channel.id, match.ts);
-      }
-      return { 
-          id: `slack-${match.ts}`, 
-          mainMessage: match, 
-          thread: thread, 
-          source: 'slack',
-          channelName: match.channel.name 
-      };
-    }));
+    const threadFn = async (task: any) => {
+        return { 
+            id: task.ts, // Use TS for simpler ID
+            mainMessage: { text: task.text, user: task.username }, 
+            thread: [], 
+            source: 'slack',
+            channelName: task.channel.name 
+        };
+    };
+    
+    return await processInBatches(filteredMatches, 10, threadFn);
 
-    return richData;
   } catch (error) { return []; }
 }

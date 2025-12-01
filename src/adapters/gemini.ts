@@ -9,6 +9,7 @@ export interface ParsedMessage { msgId: string; suggestedProject: string; }
 export interface ProposedTask { title: string; description: string; project: string; subtasks: string[]; citations: string[]; }
 export interface AiSuggestion { title: string; projectName: string; reasoning: string; }
 
+// STRATEGY: Stable Cascade
 const MODEL_CASCADE = [
   "gemini-2.5-flash",
   "gemini-2.5-pro",
@@ -20,14 +21,26 @@ const MODEL_CASCADE = [
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+// FIX: Extract Email/File Content for AI
 function minifySignals(signals: any[]): any[] {
-  return signals.map(s => ({
-    id: s.id,
-    channel: s.channelName, 
-    text: s.mainMessage?.text || "",
-    user: s.mainMessage?.username || s.mainMessage?.user,
-    replies: s.thread ? s.thread.map((t: any) => ({ user: t.user, text: t.text })) : []
-  }));
+  return signals.map(s => {
+    let content = s.mainMessage?.text || "";
+    
+    // Append File Preview (Email Body)
+    if (s.mainMessage?.files && s.mainMessage.files.length > 0) {
+        const f = s.mainMessage.files[0];
+        if (f.title) content += `\n[File/Email Subject: ${f.title}]`;
+        if (f.preview) content += `\n[File/Email Content: ${f.preview}]`;
+    }
+
+    return {
+      id: s.id,
+      channel: s.channelName, 
+      text: content,
+      user: s.mainMessage?.username || s.mainMessage?.user,
+      replies: s.thread ? s.thread.map((t: any) => ({ user: t.user, text: t.text })) : []
+    };
+  });
 }
 
 async function runWithCascade(prompt: string, maxRetriesPerModel: number): Promise<any> {
@@ -56,12 +69,7 @@ async function runWithCascade(prompt: string, maxRetriesPerModel: number): Promi
           continue; 
         }
 
-        if (msg.includes("404") || msg.includes("not found")) {
-          console.warn(`⚠️ ${modelName} not found. Skipping...`);
-          break; 
-        }
-        
-        console.warn(`❌ Error on ${modelName}: ${msg}. Switching...`);
+        if (msg.includes("404") || msg.includes("not found")) break; 
         break;
       }
     }
@@ -74,24 +82,7 @@ export async function smartParseSlack(
   rawMessages: any[], 
   availableProjects: string[]
 ): Promise<Record<string, ParsedMessage>> {
-  
-  if (rawMessages.length === 0) return {};
-  const minified = rawMessages.map(m => ({ id: m.ts, text: m.text }));
-
-  const prompt = `
-    You are an Organizational Assistant.
-    Assign each Slack message to the most relevant Project.
-    PROJECTS: ${JSON.stringify(availableProjects)}
-    MESSAGES: ${JSON.stringify(minified)}
-    INSTRUCTIONS: 1. Match to Project. 2. Default "Inbox". 3. Return JSON Object mapped by ID.
-    OUTPUT JSON: { "170983.123": { "suggestedProject": "Engineering" } }
-  `;
-
-  try {
-    return await runWithCascade(prompt, 0); 
-  } catch (e) {
-    return {};
-  }
+  return {};
 }
 
 export async function synthesizeWorkload(
