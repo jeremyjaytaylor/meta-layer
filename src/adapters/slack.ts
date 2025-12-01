@@ -212,7 +212,7 @@ export async function fetchSlackSignals(startDate?: Date): Promise<UnifiedTask[]
     // 1. Parallel Request: Search + Extra Channels
     const searchPromise = (async () => {
         // VACUUM QUERY: "to:me" OR "<@ID>" (No date filter in API string)
-        let queryString = `(<@${userId}> OR to:${userId}) -from:asana`;
+        let queryString = `to:@jeremy`;
         const encodedQuery = encodeURIComponent(queryString);
         
         let allMatches: any[] = [];
