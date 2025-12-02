@@ -4,7 +4,7 @@ import { TaskCard } from "./components/TaskCard";
 import { fetchSlackSignals, fetchRichSignals } from "./adapters/slack"; 
 import { fetchAsanaTasks, completeAsanaTask, getProjectList, createAsanaTaskWithProject, createAsanaSubtask } from "./adapters/asana";
 import { analyzeSignal, synthesizeWorkload, ProposedTask, AiSuggestion } from "./adapters/gemini"; 
-import { RefreshCw, LayoutTemplate, Sparkles, X, Check, Inbox, Filter, BrainCircuit, Calendar, Trash2, RotateCcw } from "lucide-react"; 
+import { RefreshCw, LayoutTemplate, Sparkles, X, Check, Inbox, Filter, BrainCircuit, Calendar, Trash2, RotateCcw, Archive } from "lucide-react"; 
 import "./App.css";
 
 type TimeRange = 'today' | '3days' | 'week' | '2weeks' | 'month' | 'year' | 'custom';
@@ -15,12 +15,20 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [analyzingId, setAnalyzingId] = useState<string | null>(null);
   
+  // -- TIME FILTER --
   const [timeRange, setTimeRange] = useState<TimeRange>('week');
-  const [customDate, setCustomDate] = useState<string>('');
+  const [customStart, setCustomStart] = useState<string>('');
+  const [customEnd, setCustomEnd] = useState<string>('');
+
+  // Modals
   const [reviewState, setReviewState] = useState<{ sourceTask: UnifiedTask, suggestions: AiSuggestion[], selectedIndices: Set<number> } | null>(null);
   const [synthesisResults, setSynthesisResults] = useState<ProposedTask[] | null>(null);
   const [showFilterModal, setShowFilterModal] = useState(false);
   
+  // UI State for Synthesis Processing
+  const [processingTaskIdx, setProcessingTaskIdx] = useState<number | null>(null);
+  
+  // Persistence
   const [blockedFilters, setBlockedFilters] = useState<string[]>(() => {
     const stored = localStorage.getItem("meta_blocked_filters");
     return stored ? JSON.parse(stored) : [];
@@ -33,8 +41,10 @@ function App() {
     const current = getArchivedIds();
     localStorage.setItem("meta_archived_ids", JSON.stringify([...current, id]));
   };
+  
   useEffect(() => { localStorage.setItem("meta_blocked_filters", JSON.stringify(blockedFilters)); }, [blockedFilters]);
 
+  // HELPERS
   const clearArchive = () => {
     if (confirm("Are you sure you want to un-archive all messages?")) {
         localStorage.removeItem("meta_archived_ids");
@@ -46,31 +56,52 @@ function App() {
       setBlockedFilters([]); 
   };
 
-  const calculateStartDate = (): Date | undefined => {
+  // UPDATED: Returns a Range { start, end }
+  const calculateDateRange = (): { start?: Date, end?: Date } => {
     const now = new Date();
+    const end = new Date(); // Default end is "Now"
+
     switch (timeRange) {
-        case 'today': return new Date(now.setHours(0,0,0,0));
-        case '3days': return new Date(now.setDate(now.getDate() - 3));
-        case 'week': return new Date(now.setDate(now.getDate() - 7));
-        case '2weeks': return new Date(now.setDate(now.getDate() - 14));
-        case 'month': return new Date(now.setMonth(now.getMonth() - 1));
-        case 'year': return new Date(now.setFullYear(now.getFullYear() - 1));
-        case 'custom': return customDate ? new Date(customDate) : undefined;
-        default: return undefined;
+        case 'today': 
+            return { start: new Date(now.setHours(0,0,0,0)), end };
+        case '3days': 
+            return { start: new Date(now.setDate(now.getDate() - 3)), end };
+        case 'week': 
+            return { start: new Date(now.setDate(now.getDate() - 7)), end };
+        case '2weeks': 
+            return { start: new Date(now.setDate(now.getDate() - 14)), end };
+        case 'month': 
+            return { start: new Date(now.setMonth(now.getMonth() - 1)), end };
+        case 'year': 
+            return { start: new Date(now.setFullYear(now.getFullYear() - 1)), end };
+        case 'custom': 
+            // For custom, we respect the user's end date (set to end of that day)
+            const cEnd = customEnd ? new Date(customEnd) : undefined;
+            if (cEnd) cEnd.setHours(23, 59, 59, 999);
+            return { 
+                start: customStart ? new Date(customStart) : undefined, 
+                end: cEnd
+            };
+        default: 
+            return { start: undefined, end: undefined };
     }
   };
 
+  // SYNC ENGINE
   const sync = async () => {
     setLoading(true);
     const archived = getArchivedIds();
-    const startDate = calculateStartDate();
+    const { start, end } = calculateDateRange(); // Get Range
+
+    console.log(`🔄 Syncing... Range: ${start?.toLocaleDateString()} - ${end?.toLocaleDateString()}`);
 
     const [slackData, asanaData] = await Promise.allSettled([
-      fetchSlackSignals(startDate),
-      fetchAsanaTasks()
+      fetchSlackSignals(start, end), // Pass both dates
+      fetchAsanaTasks()              // Asana unfiltered (as requested)
     ]);
     
     if (slackData.status === 'fulfilled') {
+      const rawCount = slackData.value.length;
       const newSlackTasks = slackData.value.filter(t => !archived.includes(t.id));
       setSlackTasks(newSlackTasks);
     }
@@ -79,9 +110,21 @@ function App() {
     setLoading(false);
   };
 
-  useEffect(() => { sync(); }, [timeRange, customDate]);
+  useEffect(() => { sync(); }, [timeRange, customStart, customEnd]);
 
+  // ACTIONS
   const handleArchive = (id: string) => { archiveId(id); setSlackTasks(prev => prev.filter(t => t.id !== id)); };
+  
+  const handleArchiveAll = () => {
+    if (slackTasks.length === 0) return;
+    if (confirm(`Are you sure you want to archive all ${slackTasks.length} visible signals?`)) {
+        const currentArchived = getArchivedIds();
+        const newIds = slackTasks.map(t => t.id);
+        const merged = Array.from(new Set([...currentArchived, ...newIds]));
+        localStorage.setItem("meta_archived_ids", JSON.stringify(merged));
+        setSlackTasks([]);
+    }
+  };
 
   const handleCompleteTask = async (taskId: string) => {
     setAsanaTasks(currentTasks => currentTasks.filter(t => t.externalId !== taskId));
@@ -123,10 +166,14 @@ function App() {
 
   const handleSynthesize = async () => {
     setLoading(true);
-    const startDate = calculateStartDate();
-    const signals = await fetchRichSignals(startDate);
+    const { start, end } = calculateDateRange();
+    const signals = await fetchRichSignals(start, end);
     
-    if (signals.length === 0) { alert("No Slack signals found."); setLoading(false); return; }
+    if (signals.length === 0) { 
+        alert("No Slack signals found in this time range."); 
+        setLoading(false); 
+        return; 
+    }
 
     const filteredSignals = signals.filter(s => {
         const channelKey = `channel:${s.channelName}`;
@@ -135,7 +182,7 @@ function App() {
     });
 
     if (filteredSignals.length === 0) {
-        alert("All signals filtered out.");
+        alert("All signals were filtered out.");
         setLoading(false);
         return;
     }
@@ -147,22 +194,41 @@ function App() {
   };
 
   const handleApproveSynthesizedTask = async (task: ProposedTask, index: number) => {
-    const noteBody = `${task.description}\n\n--- SOURCES ---\n${task.citations.join('\n')}`;
-    const parentId = await createAsanaTaskWithProject(task.title, task.project, noteBody);
+    setProcessingTaskIdx(index);
 
-    if (parentId && task.subtasks.length > 0) {
-        for (const sub of task.subtasks) {
-            await createAsanaSubtask(parentId, sub);
+    try {
+        const noteBody = `${task.description}\n\n--- SOURCES ---\n${task.citations.join('\n')}`;
+        const parentId = await createAsanaTaskWithProject(task.title, task.project, noteBody);
+
+        if (parentId && task.subtasks.length > 0) {
+            for (const sub of task.subtasks) {
+                await createAsanaSubtask(parentId, sub);
+            }
         }
+        
+        if (synthesisResults) {
+            const newResults = [...synthesisResults];
+            newResults.splice(index, 1);
+            setSynthesisResults(newResults);
+        }
+        
+        const newAsanaTasks = await fetchAsanaTasks();
+        setAsanaTasks(newAsanaTasks);
+
+    } catch (error) {
+        alert("Failed to create task.");
+        console.error(error);
+    } finally {
+        setProcessingTaskIdx(null);
     }
-    
-    if (synthesisResults) {
-      const newResults = [...synthesisResults];
-      newResults.splice(index, 1);
-      setSynthesisResults(newResults);
-    }
-    const newAsanaTasks = await fetchAsanaTasks();
-    setAsanaTasks(newAsanaTasks);
+  };
+
+  const handleDismissSynthesizedTask = (index: number) => {
+     if (synthesisResults) {
+        const newResults = [...synthesisResults];
+        newResults.splice(index, 1);
+        setSynthesisResults(newResults);
+     }
   };
 
   const toggleFilter = (key: string) => {
@@ -193,7 +259,6 @@ function App() {
     return !blockedFilters.includes(channelKey) && !blockedFilters.includes(authorKey);
   });
 
-  // NEW: Flat Render Group Helper (Chronological)
   const renderFlatList = (tasks: UnifiedTask[]) => {
       return (
         <div className="space-y-1">
@@ -238,9 +303,15 @@ function App() {
                     <option value="2weeks">Past 2 Weeks</option>
                     <option value="month">Past Month</option>
                     <option value="year">Past Year</option>
-                    <option value="custom">Custom...</option>
+                    <option value="custom">Custom Range...</option>
                 </select>
-                {timeRange === 'custom' && <input type="date" value={customDate} onChange={(e) => setCustomDate(e.target.value)} className="ml-2 border border-gray-300 rounded px-2 py-1 text-xs" />}
+                {timeRange === 'custom' && (
+                    <div className="flex gap-1 items-center">
+                        <input type="date" value={customStart} onChange={(e) => setCustomStart(e.target.value)} className="ml-2 border border-gray-300 rounded px-2 py-1 text-xs" />
+                        <span className="text-gray-400">-</span>
+                        <input type="date" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} className="border border-gray-300 rounded px-2 py-1 text-xs" />
+                    </div>
+                )}
             </div>
             <button onClick={clearArchive} className="flex items-center gap-2 bg-white border border-gray-200 text-gray-500 px-3 py-2 rounded-lg hover:bg-red-50 hover:text-red-600 transition shadow-sm" title="Reset Archive"><Trash2 size={16} /></button>
             {blockedFilters.length > 0 && (<button onClick={clearFilters} className="flex items-center gap-2 bg-purple-100 border border-purple-200 text-purple-700 px-3 py-2 rounded-lg hover:bg-purple-200 transition shadow-sm font-medium text-sm" title="Clear All Filters"><RotateCcw size={16} /> Clear ({blockedFilters.length})</button>)}
@@ -249,11 +320,16 @@ function App() {
             <button onClick={sync} className="flex items-center gap-2 bg-white border border-gray-200 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-50 transition shadow-sm font-medium text-sm"><RefreshCw size={16} className={loading ? "animate-spin" : ""} />Sync</button>
         </div>
       </div>
-
       <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-8">
          <div className="flex flex-col gap-4">
-            <h2 className="text-sm font-bold text-gray-500 uppercase tracking-wider flex items-center gap-2">Incoming Signals <span className="bg-purple-100 text-purple-700 text-xs px-2 py-0.5 rounded-full">{visibleSlackTasks.length}</span></h2>
-            {/* UPDATED: Use Flat List for Slack */}
+            <div className="flex justify-between items-center">
+                <h2 className="text-sm font-bold text-gray-500 uppercase tracking-wider flex items-center gap-2">Incoming Signals <span className="bg-purple-100 text-purple-700 text-xs px-2 py-0.5 rounded-full">{visibleSlackTasks.length}</span></h2>
+                {visibleSlackTasks.length > 0 && (
+                    <button onClick={handleArchiveAll} className="text-xs flex items-center gap-1 text-gray-400 hover:text-gray-600 transition">
+                        <Archive size={14} /> Archive All
+                    </button>
+                )}
+            </div>
             {renderFlatList(visibleSlackTasks)}
          </div>
          <div className="flex flex-col gap-4">
@@ -261,8 +337,7 @@ function App() {
             {renderAsanaList(asanaTasks)}
          </div>
       </div>
-
-      {/* MODALS remain same ... */}
+      {/* ... (Keep Modals Logic Same) ... */}
       {showFilterModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden animate-in fade-in zoom-in duration-200">
@@ -317,7 +392,6 @@ function App() {
           </div>
         </div>
       )}
-
       {synthesisResults && (
         <div className="fixed inset-0 bg-gray-900/90 backdrop-blur-sm flex items-center justify-center z-50 p-6">
           <div className="bg-gray-50 rounded-2xl shadow-2xl max-w-5xl w-full h-[85vh] flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">
@@ -341,7 +415,10 @@ function App() {
                       </div>
                       <div className="text-xs text-gray-400 italic">Sources: {task.citations.join(" • ")}</div>
                     </div>
-                    <button onClick={() => handleApproveSynthesizedTask(task, idx)} className="ml-6 bg-black text-white px-4 py-2 rounded-lg font-bold hover:bg-gray-800 transition flex items-center gap-2 whitespace-nowrap"><Check size={16} /> Accept</button>
+                    <div className="flex flex-col gap-2 ml-6">
+                        <button onClick={() => handleApproveSynthesizedTask(task, idx)} disabled={processingTaskIdx === idx} className={`bg-black text-white px-4 py-2 rounded-lg font-bold hover:bg-gray-800 transition flex items-center gap-2 whitespace-nowrap ${processingTaskIdx === idx ? 'opacity-50 cursor-not-allowed' : ''}`}>{processingTaskIdx === idx ? <RefreshCw size={16} className="animate-spin" /> : <Check size={16} />}{processingTaskIdx === idx ? "Creating..." : "Accept"}</button>
+                        <button onClick={() => handleDismissSynthesizedTask(idx)} disabled={processingTaskIdx === idx} className="text-gray-400 hover:text-gray-600 text-sm font-medium py-1 text-center">Dismiss</button>
+                    </div>
                   </div>
                 </div>
               ))}
@@ -349,7 +426,6 @@ function App() {
           </div>
         </div>
       )}
-
       {reviewState && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden animate-in fade-in zoom-in duration-200">
