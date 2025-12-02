@@ -57,11 +57,11 @@ function extractLink(match: any): string {
   if (textLink) return textLink[1];
 
   if (match.permalink) return match.permalink;
-
+  
   if (match.ts && match.channel) {
       const cleanTs = match.ts.replace('.', '');
       const channelId = typeof match.channel === 'string' ? match.channel : match.channel.id;
-      return `slack://channel?team=${match.team || 'T09SE32ER'}&id=${channelId}&message=${cleanTs}`;
+      return `https://slack.com/app_redirect?channel=${channelId}&message_ts=${match.ts}`;
   }
   return "";
 }
@@ -127,7 +127,7 @@ function parseMessage(match: any): UnifiedTask {
   const rawChannelId = typeof match.channel === 'string' ? match.channel : match.channel.id;
   const rawChannelName = typeof match.channel === 'string' ? match.channel : (match.channel.name || match.channel.id);
   
-  // FIX: Composite ID to be 100% unique
+  // UNIQUE ID
   const uniqueId = `slack-${rawChannelId}-${msgId}`;
 
   let project = PROJECT_MAP[rawChannelName] || PROJECT_MAP[rawChannelId];
@@ -154,7 +154,6 @@ function parseMessage(match: any): UnifiedTask {
           const cleanBody = bodyContent.replace(/<http.*?>/g, '').substring(0, 300);
           fileTitle += `\n\n${cleanBody}...`;
       }
-      
       if (!title || title === "" || title === "[Shared an Image or File]") {
           title = `📧 ${fileTitle}`; 
       }
@@ -168,17 +167,21 @@ function parseMessage(match: any): UnifiedTask {
         const rawBlocks = JSON.stringify(match.blocks);
         const docMatch = rawBlocks.match(/\*<(https:\/\/docs\.google\.com\/[^|]+)\|([^>]+)>\*/);
         if (docMatch) title = `📄 ${docMatch[2]}`;
+        
         for (const block of match.blocks) {
             if (block.elements) {
                 for (const el of block.elements) {
-                    if (el.text && typeof el.text === 'string' && !el.text.includes("docs.google.com")) {
-                         const clean = cleanSlackText(el.text);
+                    // FIX: Safe type check
+                    const textVal = (typeof el.text === 'string') ? el.text : (el.text?.text || "");
+                    if (textVal && !textVal.includes("docs.google.com")) {
+                         const clean = cleanSlackText(textVal);
                          if (clean.length > 2) title += `: "${clean}"`;
                     }
                     if (el.elements) {
                          for (const subEl of el.elements) {
-                             if (subEl.text && typeof subEl.text === 'string') {
-                                 const clean = cleanSlackText(subEl.text);
+                             const subVal = (typeof subEl.text === 'string') ? subEl.text : (subEl.text?.text || "");
+                             if (subVal) {
+                                 const clean = cleanSlackText(subVal);
                                  if (clean.length > 2 && !clean.includes("commented on")) title += `: "${clean}"`;
                              }
                          }
@@ -204,7 +207,7 @@ function parseMessage(match: any): UnifiedTask {
   if (title === "" || title === "📄 null") title = "[Shared an Image or File]";
 
   return {
-    id: uniqueId, // Use composite ID
+    id: uniqueId,
     externalId: match.ts,
     provider: provider,
     title: title,
@@ -227,13 +230,11 @@ export async function fetchSlackSignals(startDate?: Date, endDate?: Date): Promi
     const userInfo = await getUserInfo();
     if (!userInfo) return [];
 
-    // Vacuum Query
     let queryString = `to:@${userInfo.name}`;
     const encodedQuery = encodeURIComponent(queryString);
     
     let allMatches: any[] = [];
     let page = 1;
-
     console.log(`📥 Slack Query: ${queryString}`);
 
     while (page <= MAX_PAGES) {
@@ -250,54 +251,43 @@ export async function fetchSlackSignals(startDate?: Date, endDate?: Date): Promi
         page++;
     }
 
-    // Add Extra Channels
     const directHistoryPromises = EXTRA_CHANNELS.map(id => fetchChannelHistory(id, startDate));
     const [directResults] = await Promise.all([Promise.all(directHistoryPromises)]);
     const directMatches = directResults.flat();
     
     const combinedMatches = [...allMatches, ...directMatches];
     
-    // NEW DEDUPLICATION: Key = ChannelID + Timestamp
-    const seenKeys = new Set();
-    const uniqueMatches = combinedMatches.filter(m => {
-        const chId = typeof m.channel === 'string' ? m.channel : m.channel.id;
-        const key = `${chId}-${m.ts}`;
-        
-        if (seenKeys.has(key)) return false;
-        seenKeys.add(key);
-        return true;
-    });
-
-    console.log(`✅ Total Raw Messages: ${uniqueMatches.length}`);
-
-    // FIX: Added END DATE Logic
-    const filteredMatches = uniqueMatches.filter((match: any) => {
-        const rawJson = JSON.stringify(match).toLowerCase();
+    // FILTER & HYDRATE
+    const processedMatches = await Promise.all(combinedMatches.map(async (match: any) => {
+        // 1. Date Check (Normalized)
         const msgDate = new Date(parseFloat(match.ts) * 1000);
+        if (startDate && msgDate < startDate) return null;
+        if (endDate && msgDate > endDate) return null;
 
-        if (startDate && msgDate < startDate) return false;
-        if (endDate && msgDate > endDate) return false; // Fix for future messages
-        
-        if (match.username === 'asana') return false;
-        if (rawJson.includes("marked a thread as resolved")) return false;
-        if (match.channel && match.channel.name && match.channel.name.toLowerCase().startsWith("fun")) return false;
+        // 2. Noise Check
+        const rawJson = JSON.stringify(match).toLowerCase();
+        if (match.username === 'asana') return null;
+        if (rawJson.includes("marked a thread as resolved")) return null;
+        if (match.channel && match.channel.name && match.channel.name.toLowerCase().startsWith("fun")) return null;
 
-        return true;
-    });
-
-    console.log(`✅ Filtered Messages: ${filteredMatches.length}`);
-
-    // Hydrate
-    const rawMatches = await Promise.all(filteredMatches.map(async (match: any) => {
-      if ((!match.text || match.text === "") || (match.files && match.files.length > 0)) {
-        const channelId = typeof match.channel === 'string' ? match.channel : match.channel.id;
-        const hydrated = await hydrateMessage(channelId, match.ts);
-        if (hydrated) return { ...match, ...hydrated };
-      }
-      return match;
+        // 3. Hydrate if needed
+        if ((!match.text || match.text === "") || (match.files && match.files.length > 0)) {
+            const channelId = typeof match.channel === 'string' ? match.channel : match.channel.id;
+            const hydrated = await hydrateMessage(channelId, match.ts);
+            if (hydrated) return { ...match, ...hydrated };
+        }
+        return match;
     }));
 
-    return rawMatches.map(parseMessage);
+    // Remove nulls
+    const validMatches = processedMatches.filter(m => m !== null);
+
+    // FINAL DEDUPLICATION (By ID)
+    const tasks = validMatches.map(parseMessage);
+    const uniqueTasks = Array.from(new Map(tasks.map(task => [task.id, task])).values());
+
+    console.log(`✅ Final Display Count: ${uniqueTasks.length}`);
+    return uniqueTasks;
 
   } catch (error) {
     console.error("Slack Adapter Error:", error);
@@ -310,57 +300,20 @@ export async function fetchSlackSignals(startDate?: Date, endDate?: Date): Promi
 // ---------------------------------------------------------
 export async function fetchRichSignals(startDate?: Date, endDate?: Date): Promise<any[]> {
   try {
-    const userInfo = await getUserInfo();
-    if (!userInfo) return [];
-
-    let queryString = `to:@${userInfo.name}`;
-    const encodedQuery = encodeURIComponent(queryString);
+    // Reuse main fetcher to get clean list
+    const tasks = await fetchSlackSignals(startDate, endDate);
     
-    const response = await fetch(`https://slack.com/api/search.messages?query=${encodedQuery}&sort=timestamp&sort_dir=desc&count=50`, {
-      headers: { 'Authorization': `Bearer ${SLACK_TOKEN}` },
-    });
-
-    if (!response.ok) return [];
-    const data = await response.json() as any;
-    if (!data.ok || !data.messages) return [];
-
-    const filteredMatches = data.messages.matches.filter((match: any) => {
-        const rawJson = JSON.stringify(match).toLowerCase();
-        const msgDate = new Date(parseFloat(match.ts) * 1000);
-        
-        if (startDate && msgDate < startDate) return false;
-        if (endDate && msgDate > endDate) return false;
-        if (match.username === 'asana') return false;
-        if (rawJson.includes("marked a thread as resolved")) return false;
-        return true;
-    });
-
-    const richData = await Promise.all(filteredMatches.map(async (match: any) => {
-      let fullMsg = match;
-      if (match.files && match.files.length > 0) {
-          const channelId = typeof match.channel === 'string' ? match.channel : match.channel.id;
-          const hydrated = await hydrateMessage(channelId, match.ts);
-          if (hydrated) fullMsg = { ...match, ...hydrated };
-      }
-
-      let thread = [];
-      if (match.reply_count && match.reply_count > 0) {
-        thread = await fetchThread(match.channel.id, match.ts);
-      }
-      
-      const parsed = parseMessage(fullMsg);
-
-      return { 
-          id: `slack-${match.ts}`, 
-          mainMessage: { 
-             text: parsed.title, 
-             user: parsed.metadata.author,
-             files: fullMsg.files 
-          }, 
-          thread: thread, 
-          source: 'slack',
-          channelName: match.channel.name 
-      };
+    const richData = await Promise.all(tasks.map(async (task: any) => {
+        return { 
+            id: task.id, 
+            mainMessage: { 
+                text: task.title, 
+                user: task.metadata.author 
+            }, 
+            thread: [], 
+            source: 'slack',
+            channelName: task.metadata.channel 
+        };
     }));
 
     return richData;
