@@ -25,7 +25,7 @@ function App() {
   const [synthesisResults, setSynthesisResults] = useState<ProposedTask[] | null>(null);
   const [showFilterModal, setShowFilterModal] = useState(false);
   
-  // UI State for Synthesis Processing
+  // UI State
   const [processingTaskIdx, setProcessingTaskIdx] = useState<number | null>(null);
   
   // Persistence
@@ -41,7 +41,6 @@ function App() {
     const current = getArchivedIds();
     localStorage.setItem("meta_archived_ids", JSON.stringify([...current, id]));
   };
-  
   useEffect(() => { localStorage.setItem("meta_blocked_filters", JSON.stringify(blockedFilters)); }, [blockedFilters]);
 
   // HELPERS
@@ -52,11 +51,9 @@ function App() {
     }
   };
   
-  const clearFilters = () => {
-      setBlockedFilters([]); 
-  };
+  const clearFilters = () => { setBlockedFilters([]); };
 
-  // UPDATED: Returns a Range { start, end }
+  // FIX: Calculate BOTH Start and End dates
   const calculateDateRange = (): { start?: Date, end?: Date } => {
     const now = new Date();
     const end = new Date(); // Default end is "Now"
@@ -75,13 +72,11 @@ function App() {
         case 'year': 
             return { start: new Date(now.setFullYear(now.getFullYear() - 1)), end };
         case 'custom': 
-            // For custom, we respect the user's end date (set to end of that day)
+            const cStart = customStart ? new Date(customStart) : undefined;
             const cEnd = customEnd ? new Date(customEnd) : undefined;
+            // If custom end is set, make it end of that day (23:59)
             if (cEnd) cEnd.setHours(23, 59, 59, 999);
-            return { 
-                start: customStart ? new Date(customStart) : undefined, 
-                end: cEnd
-            };
+            return { start: cStart, end: cEnd };
         default: 
             return { start: undefined, end: undefined };
     }
@@ -91,17 +86,18 @@ function App() {
   const sync = async () => {
     setLoading(true);
     const archived = getArchivedIds();
-    const { start, end } = calculateDateRange(); // Get Range
+    
+    // FIX: Get range and pass BOTH to fetcher
+    const { start, end } = calculateDateRange(); 
 
     console.log(`🔄 Syncing... Range: ${start?.toLocaleDateString()} - ${end?.toLocaleDateString()}`);
 
     const [slackData, asanaData] = await Promise.allSettled([
-      fetchSlackSignals(start, end), // Pass both dates
-      fetchAsanaTasks()              // Asana unfiltered (as requested)
+      fetchSlackSignals(start, end), // <-- Pass Start AND End
+      fetchAsanaTasks()              // Asana remains unfiltered as requested
     ]);
     
     if (slackData.status === 'fulfilled') {
-      const rawCount = slackData.value.length;
       const newSlackTasks = slackData.value.filter(t => !archived.includes(t.id));
       setSlackTasks(newSlackTasks);
     }
@@ -116,13 +112,13 @@ function App() {
   const handleArchive = (id: string) => { archiveId(id); setSlackTasks(prev => prev.filter(t => t.id !== id)); };
   
   const handleArchiveAll = () => {
-    if (slackTasks.length === 0) return;
-    if (confirm(`Are you sure you want to archive all ${slackTasks.length} visible signals?`)) {
+    if (visibleSlackTasks.length === 0) return;
+    if (confirm(`Are you sure you want to archive all ${visibleSlackTasks.length} visible signals?`)) {
         const currentArchived = getArchivedIds();
-        const newIds = slackTasks.map(t => t.id);
+        const newIds = visibleSlackTasks.map(t => t.id);
         const merged = Array.from(new Set([...currentArchived, ...newIds]));
         localStorage.setItem("meta_archived_ids", JSON.stringify(merged));
-        setSlackTasks([]);
+        setSlackTasks(prev => prev.filter(t => !newIds.includes(t.id)));
     }
   };
 
@@ -147,15 +143,12 @@ function App() {
     const { sourceTask, suggestions, selectedIndices } = reviewState;
     setReviewState(null); 
     setLoading(true);
-
     let createdCount = 0;
     const tasksToCreate = suggestions.filter((_, i) => selectedIndices.has(i));
-
     for (const item of tasksToCreate) {
       await createAsanaTaskWithProject(item.title, item.projectName, `Context: ${sourceTask.url}\n\nReasoning: ${item.reasoning}`);
       createdCount++;
     }
-
     if (createdCount > 0) {
       handleArchive(sourceTask.id); 
       const newAsanaTasks = await fetchAsanaTasks();
@@ -195,32 +188,22 @@ function App() {
 
   const handleApproveSynthesizedTask = async (task: ProposedTask, index: number) => {
     setProcessingTaskIdx(index);
-
     try {
         const noteBody = `${task.description}\n\n--- SOURCES ---\n${task.citations.join('\n')}`;
         const parentId = await createAsanaTaskWithProject(task.title, task.project, noteBody);
-
         if (parentId && task.subtasks.length > 0) {
             for (const sub of task.subtasks) {
                 await createAsanaSubtask(parentId, sub);
             }
         }
-        
         if (synthesisResults) {
             const newResults = [...synthesisResults];
             newResults.splice(index, 1);
             setSynthesisResults(newResults);
         }
-        
         const newAsanaTasks = await fetchAsanaTasks();
         setAsanaTasks(newAsanaTasks);
-
-    } catch (error) {
-        alert("Failed to create task.");
-        console.error(error);
-    } finally {
-        setProcessingTaskIdx(null);
-    }
+    } catch (error) { alert("Failed to create task."); } finally { setProcessingTaskIdx(null); }
   };
 
   const handleDismissSynthesizedTask = (index: number) => {
@@ -231,10 +214,7 @@ function App() {
      }
   };
 
-  const toggleFilter = (key: string) => {
-    setBlockedFilters(prev => prev.includes(key) ? prev.filter(f => f !== key) : [...prev, key]);
-  };
-
+  const toggleFilter = (key: string) => { setBlockedFilters(prev => prev.includes(key) ? prev.filter(f => f !== key) : [...prev, key]); };
   const toggleAll = (keys: string[], shouldBlock: boolean) => {
     setBlockedFilters(prev => {
         const currentSet = new Set(prev);
@@ -246,10 +226,7 @@ function App() {
   const availableFilters = useMemo(() => {
     const channels = new Set<string>();
     const authors = new Set<string>();
-    slackTasks.forEach(t => { 
-        if(t.metadata.channel) channels.add(t.metadata.channel); 
-        if(t.metadata.author) authors.add(t.metadata.author); 
-    });
+    slackTasks.forEach(t => { if(t.metadata.channel) channels.add(t.metadata.channel); if(t.metadata.author) authors.add(t.metadata.author); });
     return { channels: Array.from(channels).sort(), authors: Array.from(authors).sort() };
   }, [slackTasks]);
 
@@ -320,15 +297,12 @@ function App() {
             <button onClick={sync} className="flex items-center gap-2 bg-white border border-gray-200 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-50 transition shadow-sm font-medium text-sm"><RefreshCw size={16} className={loading ? "animate-spin" : ""} />Sync</button>
         </div>
       </div>
+      {/* ... Grid and Modals remain same ... */}
       <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-8">
          <div className="flex flex-col gap-4">
             <div className="flex justify-between items-center">
                 <h2 className="text-sm font-bold text-gray-500 uppercase tracking-wider flex items-center gap-2">Incoming Signals <span className="bg-purple-100 text-purple-700 text-xs px-2 py-0.5 rounded-full">{visibleSlackTasks.length}</span></h2>
-                {visibleSlackTasks.length > 0 && (
-                    <button onClick={handleArchiveAll} className="text-xs flex items-center gap-1 text-gray-400 hover:text-gray-600 transition">
-                        <Archive size={14} /> Archive All
-                    </button>
-                )}
+                {visibleSlackTasks.length > 0 && (<button onClick={handleArchiveAll} className="text-xs flex items-center gap-1 text-gray-400 hover:text-gray-600 transition"><Archive size={14} /> Archive All</button>)}
             </div>
             {renderFlatList(visibleSlackTasks)}
          </div>
@@ -337,7 +311,7 @@ function App() {
             {renderAsanaList(asanaTasks)}
          </div>
       </div>
-      {/* ... (Keep Modals Logic Same) ... */}
+      
       {showFilterModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden animate-in fade-in zoom-in duration-200">
@@ -360,7 +334,7 @@ function App() {
                     const isBlocked = blockedFilters.includes(key);
                     return (
                       <label key={key} className="flex items-center justify-between p-3 rounded-lg border border-gray-100 hover:bg-gray-50 cursor-pointer">
-                        <span className="font-medium text-gray-700">{channel.startsWith('📂') ? channel : `#${channel}`}</span>
+                        <span className="font-medium text-gray-700">{channel}</span>
                         <input type="checkbox" checked={!isBlocked} onChange={() => toggleFilter(key)} className="w-5 h-5 rounded border-gray-300 text-purple-600 focus:ring-purple-500" />
                       </label>
                     );
@@ -392,6 +366,7 @@ function App() {
           </div>
         </div>
       )}
+
       {synthesisResults && (
         <div className="fixed inset-0 bg-gray-900/90 backdrop-blur-sm flex items-center justify-center z-50 p-6">
           <div className="bg-gray-50 rounded-2xl shadow-2xl max-w-5xl w-full h-[85vh] flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">
@@ -426,6 +401,7 @@ function App() {
           </div>
         </div>
       )}
+
       {reviewState && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden animate-in fade-in zoom-in duration-200">
