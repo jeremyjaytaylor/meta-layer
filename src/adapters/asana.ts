@@ -1,6 +1,5 @@
 import { fetch } from '@tauri-apps/plugin-http';
 import { UnifiedTask } from '../types/unified';
-import { v4 as uuidv4 } from 'uuid';
 
 // SECURE: Load from environment variable
 const ASANA_TOKEN = import.meta.env.VITE_ASANA_TOKEN;
@@ -47,7 +46,11 @@ export async function fetchAsanaTasks(): Promise<UnifiedTask[]> {
       status: task.assignee_status === 'today' ? 'todo' : 'in_progress',
       createdAt: task.created_at || new Date().toISOString(),
       metadata: {
-        project: task.projects.length > 0 ? task.projects[0].name : 'My Tasks',
+        author: "Asana", // Default author for Asana tasks
+        // Map Project Name to sourceLabel
+        sourceLabel: task.projects.length > 0 ? task.projects[0].name : 'My Tasks',
+        sourceType: 'project',
+        project: task.projects.length > 0 ? task.projects[0].name : 'My Tasks', // Keep legacy field just in case
         due: task.due_on
       }
     }));

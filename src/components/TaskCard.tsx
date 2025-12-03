@@ -1,5 +1,4 @@
 import { UnifiedTask } from "../types/unified";
-// NEW: Import the 'open' command
 import { open } from '@tauri-apps/plugin-shell';
 import { MessageSquare, CheckSquare, Github, FileText, HardDrive, Check, ArrowRight, Archive, ExternalLink } from "lucide-react";
 
@@ -34,7 +33,6 @@ export function TaskCard({ task, onComplete, onPromote, onArchive }: TaskCardPro
   const dateStr = dateObj.toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' });
   const timeStr = dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-  // HANDLER: Open link in system browser
   const handleOpenLink = async () => {
     try {
       await open(task.url);
@@ -78,9 +76,10 @@ export function TaskCard({ task, onComplete, onPromote, onArchive }: TaskCardPro
               @{task.metadata.author}
             </span>
           )}
-           {task.metadata.channel && (
+           {/* FIX: Changed from .channel to .sourceLabel */}
+           {task.metadata.sourceLabel && (
             <span className="text-xs bg-white/50 border border-gray-200 px-2 py-1 rounded text-gray-600 truncate max-w-[150px]">
-              {task.metadata.channel}
+              {task.metadata.sourceLabel}
             </span>
           )}
         </div>
