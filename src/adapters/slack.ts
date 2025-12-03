@@ -66,7 +66,6 @@ async function fetchAllPages(url: string, limit = 1000): Promise<any[]> {
       const data = await response.json() as any;
       
       if (!data.ok) {
-        // IMPROVEMENT: Specific error handling for scopes
         if (data.error === 'missing_scope') {
             console.error(`🚨 PERMISSION ERROR: Your Slack Token is missing required scopes.`);
             console.error(`👉 Please add: channels:read, groups:read, im:read, mpim:read to 'User Token Scopes' in your Slack App settings.`);
@@ -103,7 +102,7 @@ export async function buildSlackContext(): Promise<SlackContext> {
     if (data.ok) selfId = data.user_id;
   } catch (e) { console.error("Auth Check Failed", e); }
 
-  // Fetch Users
+  // 1. Fetch Users
   const userMap: Record<string, SlackUser> = {};
   const users = await fetchAllPages('https://slack.com/api/users.list?');
   users.forEach((u: any) => {
@@ -115,10 +114,19 @@ export async function buildSlackContext(): Promise<SlackContext> {
     };
   });
 
-  // Fetch Channels
+  // 2. Fetch Channels (SPLIT STRATEGY)
   const channelMap: Record<string, SlackChannel> = {};
-  const channels = await fetchAllPages('https://slack.com/api/conversations.list?types=public_channel,private_channel,mpim,im');
-  channels.forEach((c: any) => {
+  
+  const [publicCh, privateCh, mpims, ims] = await Promise.all([
+    fetchAllPages('https://slack.com/api/conversations.list?types=public_channel'),
+    fetchAllPages('https://slack.com/api/conversations.list?types=private_channel'),
+    fetchAllPages('https://slack.com/api/conversations.list?types=mpim'),
+    fetchAllPages('https://slack.com/api/conversations.list?types=im')
+  ]);
+
+  const allChannels = [...publicCh, ...privateCh, ...mpims, ...ims];
+
+  allChannels.forEach((c: any) => {
     channelMap[c.id] = {
       id: c.id,
       name: c.name || "", 
@@ -129,11 +137,28 @@ export async function buildSlackContext(): Promise<SlackContext> {
     };
   });
 
-  console.log(`✅ Context Built: ${Object.keys(userMap).length} users, ${Object.keys(channelMap).length} channels.`);
+  console.log(`✅ Context Built: ${Object.keys(userMap).length} users, ${Object.keys(channelMap).length} channels/DMs.`);
   return { userMap, channelMap, selfId };
 }
 
-// --- 3. FAIL-SAFE PARSER ---
+// --- 3. INTELLIGENT PARSER ---
+
+function parseGroupDmName(rawName: string, context: SlackContext): string {
+  try {
+    // rawName format: mpdm-user1--user2--user3-1
+    const cleanStr = rawName.replace(/^mpdm-/, '').replace(/-\d+$/, '');
+    const handles = cleanStr.split('--');
+    
+    const names = handles.map(handle => {
+        const user = Object.values(context.userMap).find(u => u.name === handle);
+        return user ? user.real_name.split(' ')[0] : handle; 
+    });
+
+    return `DM: ${names.join(", ")}`;
+  } catch (e) {
+    return "Group Message";
+  }
+}
 
 function resolveSourceLabel(match: any, context: SlackContext): string {
   const channelObj = match.channel;
@@ -141,32 +166,32 @@ function resolveSourceLabel(match: any, context: SlackContext): string {
 
   const channelId = typeof channelObj === 'string' ? channelObj : channelObj.id;
   
-  // FAIL-SAFE 1: Use embedded name if available (and safe)
+  // STRATEGY 1: Use Reference Map (Source of Truth)
+  const channel = context.channelMap[channelId];
+  if (channel) {
+    if (channel.is_im && channel.user_id) {
+      const otherUser = context.userMap[channel.user_id];
+      return otherUser ? `DM: ${otherUser.real_name}` : "DM: Unknown User";
+    }
+    if (channel.is_mpim) {
+       return channel.name ? parseGroupDmName(channel.name, context) : "Group Message";
+    }
+    if (channel.name) return `#${channel.name}`;
+  }
+
+  // STRATEGY 2: Fail-Safe (Use Name from Search Result if available)
   if (channelObj.name && channelObj.name !== channelId) {
       const name = channelObj.name;
-      if (!name.startsWith("C0") && !name.startsWith("D0") && !name.startsWith("mpdm")) {
-          return `#${name}`;
-      }
+      if (name.startsWith("mpdm-")) return parseGroupDmName(name, context);
+      
+      // Better regex to ignore raw IDs (e.g. C024..., G051..., D02...)
+      // Standard Slack IDs are uppercase alphanumeric, ~9-11 chars
+      const isId = /^[A-Z][A-Z0-9]{8,12}$/.test(name);
+      
+      if (!isId) return `#${name}`;
   }
 
-  if (!channelId) return "Unknown Channel";
-
-  // FAIL-SAFE 2: Look up in Map
-  const channel = context.channelMap[channelId];
-  if (!channel) return channelId; 
-
-  if (channel.is_im && channel.user_id) {
-    const otherUser = context.userMap[channel.user_id];
-    return otherUser ? `DM: ${otherUser.real_name}` : "DM: Unknown User";
-  }
-
-  if (channel.is_mpim) {
-     return "Group Message"; 
-  }
-
-  if (channel.name) return `#${channel.name}`;
-
-  return channelId;
+  return channelId || "Unknown Channel";
 }
 
 function parseMessage(match: any, context: SlackContext): UnifiedTask {
