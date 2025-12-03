@@ -43,12 +43,7 @@ export function TaskCard({ task, onComplete, onPromote, onArchive }: TaskCardPro
 
   return (
     <div className={`p-4 rounded-lg shadow-sm border-l-4 transition mb-2 flex gap-3 ${colorClass} group max-w-full`}>
-      
-      {/* 1. Main Content Area */}
-      <div 
-        className="flex-1 cursor-pointer min-w-0"
-        onClick={handleOpenLink}
-      >
+      <div className="flex-1 cursor-pointer min-w-0" onClick={handleOpenLink}>
         <div className="flex justify-between items-start mb-1">
           <div className="flex items-center gap-2">
             <Icon size={16} className="text-gray-600 flex-shrink-0" />
@@ -76,7 +71,7 @@ export function TaskCard({ task, onComplete, onPromote, onArchive }: TaskCardPro
               @{task.metadata.author}
             </span>
           )}
-           {/* FIX: Changed from .channel to .sourceLabel */}
+           {/* FIX: Use sourceLabel here */}
            {task.metadata.sourceLabel && (
             <span className="text-xs bg-white/50 border border-gray-200 px-2 py-1 rounded text-gray-600 truncate max-w-[150px]">
               {task.metadata.sourceLabel}
@@ -85,40 +80,23 @@ export function TaskCard({ task, onComplete, onPromote, onArchive }: TaskCardPro
         </div>
       </div>
 
-      {/* 2. Action Buttons */}
       <div className="flex flex-col justify-start gap-2 border-l border-gray-200/50 pl-2 opacity-80 group-hover:opacity-100 transition flex-shrink-0">
-        
         {task.provider === 'asana' && onComplete && (
-          <button 
-            onClick={(e) => { e.stopPropagation(); if (task.externalId) onComplete(task.externalId); }}
-            className="p-1.5 bg-white rounded hover:bg-green-100 text-gray-400 hover:text-green-600 transition border border-gray-200"
-            title="Mark Complete"
-          >
+          <button onClick={(e) => { e.stopPropagation(); if (task.externalId) onComplete(task.externalId); }} className="p-1.5 bg-white rounded hover:bg-green-100 text-gray-400 hover:text-green-600 transition border border-gray-200">
             <Check size={16} />
           </button>
         )}
-
         {task.provider !== 'asana' && onPromote && (
-          <button 
-            onClick={(e) => { e.stopPropagation(); onPromote(task); }}
-            className="p-1.5 bg-white rounded hover:bg-blue-100 text-gray-400 hover:text-blue-600 transition border border-gray-200"
-            title="Turn into Task"
-          >
+          <button onClick={(e) => { e.stopPropagation(); onPromote(task); }} className="p-1.5 bg-white rounded hover:bg-blue-100 text-gray-400 hover:text-blue-600 transition border border-gray-200">
             <ArrowRight size={16} />
           </button>
         )}
-
         {task.provider !== 'asana' && onArchive && (
-          <button 
-            onClick={(e) => { e.stopPropagation(); onArchive(task.id); }}
-            className="p-1.5 bg-white rounded hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition border border-gray-200"
-            title="Archive Signal"
-          >
+          <button onClick={(e) => { e.stopPropagation(); onArchive(task.id); }} className="p-1.5 bg-white rounded hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition border border-gray-200">
             <Archive size={16} />
           </button>
         )}
       </div>
-
     </div>
   );
 }

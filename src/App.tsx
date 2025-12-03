@@ -10,44 +10,32 @@ import "./App.css";
 type TimeRange = 'today' | '3days' | 'week' | '2weeks' | 'month' | 'year' | 'custom';
 
 function App() {
-  // -------------------------------------------------------------------------
-  // 1. STATE MANAGEMENT
-  // -------------------------------------------------------------------------
   const [slackTasks, setSlackTasks] = useState<UnifiedTask[]>([]);
   const [asanaTasks, setAsanaTasks] = useState<UnifiedTask[]>([]);
   const [loading, setLoading] = useState(false);
   const [analyzingId, setAnalyzingId] = useState<string | null>(null);
   
-  // Context & Errors
   const [slackContext, setSlackContext] = useState<SlackContext | null>(null);
   const [initError, setInitError] = useState<string | null>(null);
 
-  // Time Filter
   const [timeRange, setTimeRange] = useState<TimeRange>('week');
   const [customStart, setCustomStart] = useState<string>('');
   const [customEnd, setCustomEnd] = useState<string>('');
 
-  // Modals & UI
   const [reviewState, setReviewState] = useState<{ sourceTask: UnifiedTask, suggestions: AiSuggestion[], selectedIndices: Set<number> } | null>(null);
   const [synthesisResults, setSynthesisResults] = useState<ProposedTask[] | null>(null);
   const [showFilterModal, setShowFilterModal] = useState(false);
   const [processingTaskIdx, setProcessingTaskIdx] = useState<number | null>(null);
   
-  // Persistence
   const [blockedFilters, setBlockedFilters] = useState<string[]>(() => {
     const stored = localStorage.getItem("meta_blocked_filters");
     return stored ? JSON.parse(stored) : [];
   });
 
-  // Effects for Persistence
   useEffect(() => { 
     localStorage.setItem("meta_blocked_filters", JSON.stringify(blockedFilters)); 
   }, [blockedFilters]);
 
-  // -------------------------------------------------------------------------
-  // 2. CORE LOGIC (Defined BEFORE Handlers)
-  // -------------------------------------------------------------------------
-  
   const getArchivedIds = (): string[] => {
     const stored = localStorage.getItem("meta_archived_ids");
     return stored ? JSON.parse(stored) : [];
@@ -86,7 +74,6 @@ function App() {
     ]);
     
     if (slackData.status === 'fulfilled') {
-      // Filter out archived items
       const active = slackData.value.filter(t => !archivedIds.includes(t.id));
       setSlackTasks(active);
     }
@@ -95,16 +82,11 @@ function App() {
     setLoading(false);
   };
 
-  // -------------------------------------------------------------------------
-  // 3. INITIALIZATION & EFFECTS
-  // -------------------------------------------------------------------------
-
-  // A. Build Context on Mount
   useEffect(() => {
     const init = async () => {
       try {
         setLoading(true);
-        console.log("🏗️ Building Slack Context (Fetching Users & Channels)...");
+        console.log("🏗️ Building Slack Context...");
         const ctx = await buildSlackContext();
         setSlackContext(ctx);
         setLoading(false);
@@ -117,14 +99,9 @@ function App() {
     init();
   }, []);
 
-  // B. Trigger Sync when Context is ready OR filters change
   useEffect(() => {
     if (slackContext) sync(slackContext);
   }, [slackContext, timeRange, customStart, customEnd]);
-
-  // -------------------------------------------------------------------------
-  // 4. ACTION HANDLERS
-  // -------------------------------------------------------------------------
 
   const clearArchive = () => {
     if (confirm("Are you sure you want to un-archive all messages?")) {
@@ -185,7 +162,6 @@ function App() {
     const { start, end } = calculateDateRange();
     const signals = await fetchRichSignals(slackContext, start, end);
     
-    // Apply filters before sending to AI
     const filteredSignals = signals.filter(s => {
         const chKey = `channel:${s.channelName}`;
         const userKey = `author:${s.mainMessage.user}`;
@@ -237,10 +213,6 @@ function App() {
     });
   };
 
-  // -------------------------------------------------------------------------
-  // 5. VIEW HELPERS
-  // -------------------------------------------------------------------------
-
   const visibleSlackTasks = slackTasks.filter(t => {
     const chKey = `channel:${t.metadata.sourceLabel}`;
     const userKey = `author:${t.metadata.author}`;
@@ -275,7 +247,7 @@ function App() {
 
   const renderAsanaList = (tasks: UnifiedTask[]) => {
       const groups: Record<string, UnifiedTask[]> = {};
-      tasks.forEach(t => { const p = t.metadata.project || "My Tasks"; if (!groups[p]) groups[p] = []; groups[p].push(t); });
+      tasks.forEach(t => { const p = t.metadata.sourceLabel || "My Tasks"; if (!groups[p]) groups[p] = []; groups[p].push(t); });
       return Object.keys(groups).sort().map(project => (
         <div key={project} className="mb-6">
           <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 flex items-center gap-2"><Inbox size={12} /> {project}</h3>
@@ -284,9 +256,6 @@ function App() {
       ));
   };
 
-  // -------------------------------------------------------------------------
-  // 6. RENDER
-  // -------------------------------------------------------------------------
   return (
     <div className="min-h-screen p-8 text-gray-900 font-sans bg-gray-50 relative">
       <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
@@ -298,7 +267,6 @@ function App() {
             </div>
         </div>
         
-        {/* Controls */}
         <div className="flex flex-wrap gap-2 items-center">
             <div className="flex items-center gap-2 bg-white border border-gray-200 px-3 py-2 rounded-lg shadow-sm">
                 <Calendar size={16} className="text-gray-500" />
@@ -452,5 +420,3 @@ function App() {
     </div>
   );
 }
-
-export default App;

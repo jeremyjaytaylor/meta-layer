@@ -1,10 +1,8 @@
 import { fetch } from '@tauri-apps/plugin-http';
 import { UnifiedTask } from '../types/unified';
 
-// SECURE: Load from environment variable
 const ASANA_TOKEN = import.meta.env.VITE_ASANA_TOKEN;
 
-// Helper: Get Workspace ID
 async function getWorkspaceId(): Promise<string | null> {
   try {
     if (!ASANA_TOKEN) throw new Error("Missing VITE_ASANA_TOKEN");
@@ -12,13 +10,9 @@ async function getWorkspaceId(): Promise<string | null> {
       headers: { 'Authorization': `Bearer ${ASANA_TOKEN}` }
     });
     const userData = await userResponse.json() as any;
-    if (userData.data && userData.data.workspaces.length > 0) {
-        return userData.data.workspaces[0].gid;
-    }
+    if (userData.data && userData.data.workspaces.length > 0) return userData.data.workspaces[0].gid;
     return null;
-  } catch (e) {
-    return null;
-  }
+  } catch (e) { return null; }
 }
 
 export async function fetchAsanaTasks(): Promise<UnifiedTask[]> {
@@ -46,15 +40,12 @@ export async function fetchAsanaTasks(): Promise<UnifiedTask[]> {
       status: task.assignee_status === 'today' ? 'todo' : 'in_progress',
       createdAt: task.created_at || new Date().toISOString(),
       metadata: {
-        author: "Asana", // Default author for Asana tasks
-        // Map Project Name to sourceLabel
+        author: "Asana", 
         sourceLabel: task.projects.length > 0 ? task.projects[0].name : 'My Tasks',
         sourceType: 'project',
-        project: task.projects.length > 0 ? task.projects[0].name : 'My Tasks', // Keep legacy field just in case
         due: task.due_on
       }
     }));
-
   } catch (error) {
     console.error("Asana Fetch Error:", error);
     return [];
@@ -72,9 +63,7 @@ export async function completeAsanaTask(taskId: string): Promise<boolean> {
       body: JSON.stringify({ data: { completed: true } })
     });
     return response.ok;
-  } catch (error) {
-    return false;
-  }
+  } catch (error) { return false; }
 }
 
 export async function getProjectList(): Promise<string[]> {
@@ -88,9 +77,7 @@ export async function getProjectList(): Promise<string[]> {
     const data = await response.json() as any;
     if (!data.data) return [];
     return data.data.map((p: any) => p.name);
-  } catch (error) {
-    return ["My Tasks"]; 
-  }
+  } catch (error) { return ["My Tasks"]; }
 }
 
 export async function createAsanaTaskWithProject(title: string, projectName: string, notes: string): Promise<string | null> {
@@ -106,13 +93,7 @@ export async function createAsanaTaskWithProject(title: string, projectName: str
     const project = projectsData.data.find((p: any) => p.name === projectName);
     const projectId = project ? project.gid : null;
 
-    const body: any = {
-      workspace: workspaceId,
-      name: title,
-      notes: notes,
-      assignee: 'me'
-    };
-
+    const body: any = { workspace: workspaceId, name: title, notes: notes, assignee: 'me' };
     if (projectId) body.projects = [projectId];
 
     const response = await fetch(`https://app.asana.com/api/1.0/tasks`, {
@@ -126,11 +107,7 @@ export async function createAsanaTaskWithProject(title: string, projectName: str
     
     const json = await response.json() as any;
     return json.data ? json.data.gid : null; 
-
-  } catch (error) {
-    console.error("Failed to create task:", error);
-    return null;
-  }
+  } catch (error) { return null; }
 }
 
 export async function createAsanaSubtask(parentId: string, title: string): Promise<boolean> {
@@ -141,13 +118,8 @@ export async function createAsanaSubtask(parentId: string, title: string): Promi
           'Authorization': `Bearer ${ASANA_TOKEN}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ 
-          data: { name: title } 
-        })
+        body: JSON.stringify({ data: { name: title } })
       });
       return response.ok;
-  } catch (e) {
-    console.error("Failed to create subtask", e);
-    return false;
-  }
+  } catch (e) { return false; }
 }

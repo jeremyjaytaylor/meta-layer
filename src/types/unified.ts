@@ -9,14 +9,13 @@ export interface UnifiedTask {
   status: 'todo' | 'in_progress' | 'done';
   createdAt: string;
   metadata: {
-    author: string;        // Explicitly required
-    sourceLabel: string;   // e.g. "#general" or "DM: Alice, Bob"
+    author: string;
+    sourceLabel: string;   // The human-readable location (e.g. "#general", "DM: Alice")
     sourceType: 'channel' | 'dm' | 'mpdm' | 'project';
     due?: string;
   };
 }
 
-// THE REFERENCE STORE
 export interface SlackContext {
   userMap: Record<string, SlackUser>;
   channelMap: Record<string, SlackChannel>;
@@ -25,8 +24,8 @@ export interface SlackContext {
 
 export interface SlackUser {
   id: string;
-  name: string;      // The "handle" (e.g., "jeremy")
-  real_name: string; // The display name (e.g., "Jeremy Taylor")
+  name: string;
+  real_name: string;
   is_bot: boolean;
 }
 
@@ -34,15 +33,14 @@ export interface SlackChannel {
   id: string;
   name: string;
   is_channel: boolean;
-  is_im: boolean;    // Direct Message
-  is_mpim: boolean;  // Multi-Party Direct Message (Group DM)
-  user_id?: string;  // If DM, who is it with?
+  is_im: boolean;
+  is_mpim: boolean;
+  user_id?: string;
 }
 
-// User Profile for the new onboarding feature
 export interface UserProfile {
   name: string;
   title: string;
   roleDescription: string;
-  monitoredChannels: string[]; // List of Channel IDs to sync
+  monitoredChannels: string[];
 }
