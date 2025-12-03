@@ -16,14 +16,12 @@ function cleanSlackText(text: string, context?: SlackContext): string {
     .replace(/<http.*?>/g, '')     
     .replace(/\s+/g, ' ');
 
-  // Resolve <@U123> tags if we have context
   if (context && Object.keys(context.userMap).length > 0) {
     cleaned = cleaned.replace(/<@(U[A-Z0-9]+)>/g, (_, userId) => {
       const user = context.userMap[userId];
       return user ? `@${user.real_name}` : `@${userId}`;
     });
   } else {
-    // Fallback: Just remove the tag if we can't resolve it
     cleaned = cleaned.replace(/<@.*?>/g, '');
   }
 
@@ -46,7 +44,9 @@ function extractLink(match: any): string {
 
   if (match.ts && match.channel) {
       const channelId = typeof match.channel === 'string' ? match.channel : match.channel.id;
-      return `https://slack.com/app_redirect?channel=${channelId}&message_ts=${match.ts}`;
+      if (channelId) {
+        return `https://slack.com/app_redirect?channel=${channelId}&message_ts=${match.ts}`;
+      }
   }
   return "";
 }
@@ -66,7 +66,13 @@ async function fetchAllPages(url: string, limit = 1000): Promise<any[]> {
       const data = await response.json() as any;
       
       if (!data.ok) {
-        console.warn(`⚠️ Slack API Error (${url}):`, data.error);
+        // IMPROVEMENT: Specific error handling for scopes
+        if (data.error === 'missing_scope') {
+            console.error(`🚨 PERMISSION ERROR: Your Slack Token is missing required scopes.`);
+            console.error(`👉 Please add: channels:read, groups:read, im:read, mpim:read to 'User Token Scopes' in your Slack App settings.`);
+        } else {
+            console.warn(`⚠️ Slack API Error (${url}):`, data.error);
+        }
         break;
       }
       
@@ -74,8 +80,6 @@ async function fetchAllPages(url: string, limit = 1000): Promise<any[]> {
       allItems = [...allItems, ...items];
       
       nextCursor = data.response_metadata?.next_cursor;
-      
-      // RATE LIMIT PROTECTION: Small delay between pages
       if (nextCursor) await new Promise(r => setTimeout(r, 200));
 
     } while (nextCursor);
@@ -89,7 +93,6 @@ async function fetchAllPages(url: string, limit = 1000): Promise<any[]> {
 export async function buildSlackContext(): Promise<SlackContext> {
   if (!SLACK_TOKEN) throw new Error("Missing VITE_SLACK_TOKEN");
 
-  // A. Fetch Self
   let selfId = "";
   try {
     const response = await fetch('https://slack.com/api/auth.test', {
@@ -100,10 +103,9 @@ export async function buildSlackContext(): Promise<SlackContext> {
     if (data.ok) selfId = data.user_id;
   } catch (e) { console.error("Auth Check Failed", e); }
 
-  // B. Fetch Users
+  // Fetch Users
   const userMap: Record<string, SlackUser> = {};
   const users = await fetchAllPages('https://slack.com/api/users.list?');
-  
   users.forEach((u: any) => {
     userMap[u.id] = {
       id: u.id,
@@ -113,10 +115,9 @@ export async function buildSlackContext(): Promise<SlackContext> {
     };
   });
 
-  // C. Fetch Channels (Using 'types' to get everything)
+  // Fetch Channels
   const channelMap: Record<string, SlackChannel> = {};
   const channels = await fetchAllPages('https://slack.com/api/conversations.list?types=public_channel,private_channel,mpim,im');
-
   channels.forEach((c: any) => {
     channelMap[c.id] = {
       id: c.id,
@@ -135,61 +136,59 @@ export async function buildSlackContext(): Promise<SlackContext> {
 // --- 3. FAIL-SAFE PARSER ---
 
 function resolveSourceLabel(match: any, context: SlackContext): string {
-  const channelId = typeof match.channel === 'string' ? match.channel : match.channel.id;
+  const channelObj = match.channel;
+  if (!channelObj) return "Unknown Source";
+
+  const channelId = typeof channelObj === 'string' ? channelObj : channelObj.id;
   
-  // FAIL-SAFE 1: Use the name from the search result if available (Bypasses empty Map)
-  if (match.channel && match.channel.name && match.channel.name !== channelId) {
-      const name = match.channel.name;
-      // If it looks like a readable name (not C0... or D0...), use it
+  // FAIL-SAFE 1: Use embedded name if available (and safe)
+  if (channelObj.name && channelObj.name !== channelId) {
+      const name = channelObj.name;
       if (!name.startsWith("C0") && !name.startsWith("D0") && !name.startsWith("mpdm")) {
           return `#${name}`;
       }
   }
 
+  if (!channelId) return "Unknown Channel";
+
+  // FAIL-SAFE 2: Look up in Map
   const channel = context.channelMap[channelId];
-  
-  // FAIL-SAFE 2: Cache Miss or Map Empty
   if (!channel) return channelId; 
 
-  // Case: DM
   if (channel.is_im && channel.user_id) {
     const otherUser = context.userMap[channel.user_id];
     return otherUser ? `DM: ${otherUser.real_name}` : "DM: Unknown User";
   }
 
-  // Case: Group DM
   if (channel.is_mpim) {
-     return "Group Message"; // Simplified to avoid complex parsing errors
+     return "Group Message"; 
   }
 
-  // Case: Channel
   if (channel.name) return `#${channel.name}`;
 
   return channelId;
 }
 
 function parseMessage(match: any, context: SlackContext): UnifiedTask {
-  const msgId = match.ts.replace('.', '');
-  const rawChannelId = typeof match.channel === 'string' ? match.channel : match.channel.id;
+  const msgId = match.ts ? match.ts.replace('.', '') : Math.random().toString(36).substr(2, 9);
   
-  // Resolve Label using the whole match object
-  const sourceLabel = resolveSourceLabel(match, context);
+  const channelObj = match.channel;
+  const rawChannelId = typeof channelObj === 'string' ? channelObj : (channelObj?.id || "unknown");
+  
+  const sourceLabel = resolveSourceLabel(match, context) || "Unknown Source";
   const sourceType = sourceLabel.startsWith("DM:") ? 'dm' : 'channel';
 
-  // Resolve Author
   const userId = match.user || match.username;
-  let author = userId;
+  let author = userId || "Unknown";
   if (context.userMap[userId]) {
     author = context.userMap[userId].real_name;
   }
 
   const uniqueId = `slack-${rawChannelId}-${msgId}`;
-
   let title = cleanSlackText(match.text, context);
   let provider: 'slack' | 'gdrive' | 'notion' = 'slack';
   let url = extractLink(match);
 
-  // Heuristics
   if (url.includes("docs.google.com") || url.includes("drive.google.com")) provider = 'gdrive';
   
   if (match.files?.[0]) {
@@ -222,7 +221,7 @@ function parseMessage(match: any, context: SlackContext): UnifiedTask {
     createdAt: new Date(parseFloat(match.ts) * 1000).toISOString(),
     metadata: {
       author: author,
-      sourceLabel: sourceLabel, // Ensure this field is populated
+      sourceLabel: sourceLabel,
       sourceType: sourceType
     }
   };
@@ -261,6 +260,7 @@ export async function fetchSlackSignals(
     }
 
     const filteredMatches = allMatches.filter((match: any) => {
+        if (!match.ts) return false;
         const msgDate = new Date(parseFloat(match.ts) * 1000);
         if (startDate && msgDate < startDate) return false;
         if (endDate && msgDate > endDate) return false; 
