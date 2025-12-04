@@ -262,7 +262,7 @@ export async function fetchSlackSignals(
   try {
     if (!context.selfId) return [];
 
-    let queryString = `to:@${context.userMap[context.selfId]?.name || 'me'}`;
+    let queryString = `*`;
     const encodedQuery = encodeURIComponent(queryString);
     
     let allMatches: any[] = [];
