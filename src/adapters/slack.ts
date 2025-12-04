@@ -127,6 +127,9 @@ export async function buildSlackContext(): Promise<SlackContext> {
   const allChannels = [...publicCh, ...privateCh, ...mpims, ...ims];
 
   allChannels.forEach((c: any) => {
+    // FILTER: Skip archived/deleted channels to keep the list manageable
+    if (c.is_archived) return;
+
     channelMap[c.id] = {
       id: c.id,
       name: c.name || "", 
@@ -137,7 +140,7 @@ export async function buildSlackContext(): Promise<SlackContext> {
     };
   });
 
-  console.log(`✅ Context Built: ${Object.keys(userMap).length} users, ${Object.keys(channelMap).length} channels/DMs.`);
+  console.log(`✅ Context Built: ${Object.keys(userMap).length} users, ${Object.keys(channelMap).length} active channels/DMs.`);
   return { userMap, channelMap, selfId };
 }
 
@@ -286,10 +289,22 @@ export async function fetchSlackSignals(
 
     const filteredMatches = allMatches.filter((match: any) => {
         if (!match.ts) return false;
+        
+        // Date Check
         const msgDate = new Date(parseFloat(match.ts) * 1000);
         if (startDate && msgDate < startDate) return false;
         if (endDate && msgDate > endDate) return false; 
+        
+        // Ignore Asana Bot
         if (match.username === 'asana') return false; 
+
+        // CRITICAL: Filter out messages from channels not in our ACTIVE channelMap.
+        // This effectively excludes archived or deleted channels since they weren't added to channelMap in buildSlackContext.
+        const channelId = typeof match.channel === 'string' ? match.channel : match.channel?.id;
+        if (channelId && !context.channelMap[channelId]) {
+            return false;
+        }
+
         return true;
     });
 

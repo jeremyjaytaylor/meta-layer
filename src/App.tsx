@@ -4,7 +4,7 @@ import { TaskCard } from "./components/TaskCard";
 import { fetchSlackSignals, fetchRichSignals, buildSlackContext } from "./adapters/slack"; 
 import { fetchAsanaTasks, completeAsanaTask, getProjectList, createAsanaTaskWithProject, createAsanaSubtask } from "./adapters/asana";
 import { analyzeSignal, synthesizeWorkload, ProposedTask, AiSuggestion } from "./adapters/gemini"; 
-import { RefreshCw, LayoutTemplate, Sparkles, X, Check, Inbox, Filter, BrainCircuit, Calendar, Trash2, RotateCcw, Archive } from "lucide-react"; 
+import { RefreshCw, LayoutTemplate, Sparkles, X, Check, Inbox, Filter, BrainCircuit, Calendar, Trash2, RotateCcw, Archive, Search } from "lucide-react"; 
 import "./App.css";
 
 type TimeRange = 'today' | '3days' | 'week' | '2weeks' | 'month' | 'year' | 'custom';
@@ -27,6 +27,9 @@ function App() {
   const [showFilterModal, setShowFilterModal] = useState(false);
   const [processingTaskIdx, setProcessingTaskIdx] = useState<number | null>(null);
   
+  // NEW: Search state for filter modal
+  const [filterSearch, setFilterSearch] = useState("");
+
   const [blockedFilters, setBlockedFilters] = useState<string[]>(() => {
     const stored = localStorage.getItem("meta_blocked_filters");
     return stored ? JSON.parse(stored) : [];
@@ -317,6 +320,18 @@ function App() {
                 <h3 className="text-xl font-bold">Signal Filters</h3>
                 <button onClick={() => setShowFilterModal(false)}><X className="text-gray-400" /></button>
             </div>
+
+            {/* NEW: Search Bar */}
+            <div className="relative mb-6">
+                <input 
+                    type="text" 
+                    placeholder="Search channels & people..." 
+                    className="w-full border border-gray-300 rounded-lg pl-10 pr-4 py-2 text-sm focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
+                    value={filterSearch}
+                    onChange={e => setFilterSearch(e.target.value)}
+                />
+                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            </div>
             
             <div className="mb-6">
                 <div className="flex justify-between mb-2">
@@ -326,7 +341,9 @@ function App() {
                         <span onClick={() => toggleAll(availableFilters.channels, 'channel', true)}>None</span>
                     </div>
                 </div>
-                {availableFilters.channels.map(c => (
+                {availableFilters.channels
+                    .filter(c => c.toLowerCase().includes(filterSearch.toLowerCase()))
+                    .map(c => (
                     <label key={c} className="flex items-center justify-between p-2 hover:bg-gray-50 rounded cursor-pointer">
                         <span className="text-sm">{c}</span>
                         <input type="checkbox" checked={!blockedFilters.includes(`channel:${c}`)} onChange={() => toggleFilter(`channel:${c}`)} />
@@ -342,7 +359,9 @@ function App() {
                         <span onClick={() => toggleAll(availableFilters.authors, 'author', true)}>None</span>
                     </div>
                 </div>
-                {availableFilters.authors.map(a => (
+                {availableFilters.authors
+                    .filter(a => a.toLowerCase().includes(filterSearch.toLowerCase()))
+                    .map(a => (
                     <label key={a} className="flex items-center justify-between p-2 hover:bg-gray-50 rounded cursor-pointer">
                         <span className="text-sm">@{a}</span>
                         <input type="checkbox" checked={!blockedFilters.includes(`author:${a}`)} onChange={() => toggleFilter(`author:${a}`)} />
