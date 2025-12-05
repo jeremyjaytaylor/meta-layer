@@ -1,4 +1,5 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { UserProfile } from "../types/unified";
 
 // SECURE: Load from environment variable
 const API_KEY = import.meta.env.VITE_GEMINI_API_KEY; 
@@ -88,30 +89,54 @@ export async function smartParseSlack(
 export async function synthesizeWorkload(
   activeSignals: any[], 
   archivedContext: any[],
-  availableProjects: string[]
+  availableProjects: string[] | null,
+  userProfile: UserProfile | null
 ): Promise<ProposedTask[]> {
 
   const cleanSignals = minifySignals(activeSignals);
+  const projectList = availableProjects ? JSON.stringify(availableProjects) : "[]";
+
+  let personaContext = "You are a Chief of Staff.";
+  let prioritizationInstructions = "Cluster related threads into Major Tasks.";
+
+  if (userProfile) {
+    personaContext = `
+      You are acting as the personal Executive Assistant for **${userProfile.name}**, who is a **${userProfile.title}**.
+      
+      USER CONTEXT:
+      - **Role Description**: ${userProfile.roleDescription}
+      - **Key Priorities**: ${userProfile.keyPriorities.join(", ")}
+      - **Topics to IGNORE**: ${userProfile.ignoredTopics.join(", ")}
+    `;
+
+    prioritizationInstructions = `
+      1. **FILTER**: Strictly ignore signals related to the "Topics to IGNORE" list.
+      2. **PRIORITIZE**: Focus on signals that align with the "Key Priorities" and the user's role.
+      3. **CLUSTER**: Group related threads into Major Tasks.
+    `;
+  }
 
   const prompt = `
-    You are a Chief of Staff. Synthesize these Slack signals into a Project Plan.
+    ${personaContext}
+    
+    Your goal is to synthesize these Slack signals into a Project Plan that is actionable for this specific user.
     
     INPUTS:
     1. SIGNALS: ${JSON.stringify(cleanSignals)}
-    2. PROJECTS: ${JSON.stringify(availableProjects)}
+    2. AVAILABLE ASANA PROJECTS: ${projectList}
 
     INSTRUCTIONS:
-    1. Cluster related threads into Major Tasks.
-    2. Ignore resolved/done items.
-    3. Create subtasks for specific actions.
-    4. CITE SOURCES (Who said it?).
+    ${prioritizationInstructions}
+    4. Ignore resolved/done items.
+    5. Create subtasks for specific actions.
+    6. CITE SOURCES (Who said it?).
     
     OUTPUT JSON ARRAY:
     [
       {
-        "project": "Project Name",
+        "project": "Project Name (pick best match from INPUT 2, or suggest 'My Tasks')",
         "title": "Major Task Name",
-        "description": "Context...",
+        "description": "Context and why this is relevant to the user...",
         "subtasks": ["Action 1", "Action 2"],
         "citations": ["User said..."]
       }

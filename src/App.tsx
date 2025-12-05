@@ -1,10 +1,11 @@
 import { useState, useEffect, useMemo } from "react";
-import { UnifiedTask, SlackContext } from "./types/unified";
+import { UnifiedTask, SlackContext, UserProfile } from "./types/unified";
 import { TaskCard } from "./components/TaskCard";
-import { fetchSlackSignals, fetchRichSignals, buildSlackContext } from "./adapters/slack"; 
+import { UserProfileModal } from "./components/UserProfileModal"; 
+import { fetchSlackSignals, buildSlackContext } from "./adapters/slack"; // Removed fetchRichSignals
 import { fetchAsanaTasks, completeAsanaTask, getProjectList, createAsanaTaskWithProject, createAsanaSubtask } from "./adapters/asana";
 import { analyzeSignal, synthesizeWorkload, ProposedTask, AiSuggestion } from "./adapters/gemini"; 
-import { RefreshCw, LayoutTemplate, Sparkles, X, Check, Inbox, Filter, BrainCircuit, Calendar, Trash2, RotateCcw, Archive, Search } from "lucide-react"; 
+import { RefreshCw, LayoutTemplate, Sparkles, X, Check, Inbox, Filter, BrainCircuit, Calendar, Trash2, RotateCcw, Archive, Search, User } from "lucide-react"; 
 import "./App.css";
 
 type TimeRange = 'today' | '3days' | 'week' | '2weeks' | 'month' | 'year' | 'custom';
@@ -25,10 +26,22 @@ function App() {
   const [reviewState, setReviewState] = useState<{ sourceTask: UnifiedTask, suggestions: AiSuggestion[], selectedIndices: Set<number> } | null>(null);
   const [synthesisResults, setSynthesisResults] = useState<ProposedTask[] | null>(null);
   const [showFilterModal, setShowFilterModal] = useState(false);
+  const [showProfileModal, setShowProfileModal] = useState(false);
   const [processingTaskIdx, setProcessingTaskIdx] = useState<number | null>(null);
   
-  // NEW: Search state for filter modal
   const [filterSearch, setFilterSearch] = useState("");
+
+  // --- USER PROFILE STATE ---
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(() => {
+    const stored = localStorage.getItem("meta_user_profile");
+    return stored ? JSON.parse(stored) : null;
+  });
+
+  const handleSaveProfile = (profile: UserProfile) => {
+    setUserProfile(profile);
+    localStorage.setItem("meta_user_profile", JSON.stringify(profile));
+  };
+  // --------------------------
 
   const [blockedFilters, setBlockedFilters] = useState<string[]>(() => {
     const stored = localStorage.getItem("meta_blocked_filters");
@@ -159,22 +172,33 @@ function App() {
     setLoading(false);
   };
 
+  const visibleSlackTasks = slackTasks.filter(t => {
+    const chKey = `channel:${t.metadata.sourceLabel}`;
+    const userKey = `author:${t.metadata.author}`;
+    return !blockedFilters.includes(chKey) && !blockedFilters.includes(userKey);
+  });
+
   const handleSynthesize = async () => {
     if (!slackContext) return;
     setLoading(true);
-    const { start, end } = calculateDateRange();
-    const signals = await fetchRichSignals(slackContext, start, end);
-    
-    const filteredSignals = signals.filter(s => {
-        const chKey = `channel:${s.channelName}`;
-        const userKey = `author:${s.mainMessage.user}`;
-        return !blockedFilters.includes(chKey) && !blockedFilters.includes(userKey);
-    });
 
-    if (filteredSignals.length === 0) { alert("No signals to synthesize."); setLoading(false); return; }
+    // OPTIMIZATION: Use visibleSlackTasks instead of fetching new signals
+    if (visibleSlackTasks.length === 0) { alert("No signals to synthesize."); setLoading(false); return; }
+
+    // Transform UnifiedTask[] -> Format expected by Gemini Adapter
+    const richSignals = visibleSlackTasks.map(task => ({
+        id: task.id, 
+        mainMessage: { 
+            text: task.title, 
+            user: task.metadata.author 
+        }, 
+        thread: [], // Current implementation doesn't fetch threads anyway
+        source: 'slack',
+        channelName: task.metadata.sourceLabel 
+    }));
 
     const projects = await getProjectList();
-    const plan = await synthesizeWorkload(filteredSignals, [], projects);
+    const plan = await synthesizeWorkload(richSignals, [], projects, userProfile);
     setSynthesisResults(plan);
     setLoading(false);
   };
@@ -215,12 +239,6 @@ function App() {
         return Array.from(currentSet);
     });
   };
-
-  const visibleSlackTasks = slackTasks.filter(t => {
-    const chKey = `channel:${t.metadata.sourceLabel}`;
-    const userKey = `author:${t.metadata.author}`;
-    return !blockedFilters.includes(chKey) && !blockedFilters.includes(userKey);
-  });
 
   const availableFilters = useMemo(() => {
     const channels = new Set<string>();
@@ -290,6 +308,10 @@ function App() {
                 )}
             </div>
             
+            <button onClick={() => setShowProfileModal(true)} className={`p-2 border rounded-lg transition ${userProfile ? 'bg-purple-50 text-purple-700 border-purple-200' : 'bg-white text-gray-500 hover:bg-gray-50'}`} title="User Profile">
+                <User size={16} />
+            </button>
+
             <button onClick={clearArchive} className="p-2 bg-white border rounded-lg hover:bg-red-50 text-gray-500 hover:text-red-600 transition" title="Reset Archive"><Trash2 size={16} /></button>
             {blockedFilters.length > 0 && <button onClick={clearFilters} className="flex items-center gap-2 bg-purple-100 text-purple-700 px-3 py-2 rounded-lg text-sm font-bold"><RotateCcw size={14}/> Clear ({blockedFilters.length})</button>}
             <button onClick={handleSynthesize} disabled={!slackContext} className="flex items-center gap-2 bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition font-bold text-sm disabled:opacity-50"><BrainCircuit size={16} /> {loading ? "..." : "Synthesize"}</button>
@@ -313,6 +335,14 @@ function App() {
          </div>
       </div>
 
+      {showProfileModal && (
+        <UserProfileModal 
+            initialProfile={userProfile} 
+            onSave={handleSaveProfile} 
+            onClose={() => setShowProfileModal(false)} 
+        />
+      )}
+
       {showFilterModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-xl max-w-md w-full overflow-hidden p-6 max-h-[80vh] overflow-y-auto">
@@ -320,8 +350,7 @@ function App() {
                 <h3 className="text-xl font-bold">Signal Filters</h3>
                 <button onClick={() => setShowFilterModal(false)}><X className="text-gray-400" /></button>
             </div>
-
-            {/* NEW: Search Bar */}
+            
             <div className="relative mb-6">
                 <input 
                     type="text" 
@@ -332,7 +361,7 @@ function App() {
                 />
                 <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
             </div>
-            
+
             <div className="mb-6">
                 <div className="flex justify-between mb-2">
                     <h4 className="text-xs font-bold text-gray-400 uppercase">Sources</h4>

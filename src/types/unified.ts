@@ -42,5 +42,6 @@ export interface UserProfile {
   name: string;
   title: string;
   roleDescription: string;
-  monitoredChannels: string[];
+  keyPriorities: string[];  // e.g. ["Q3 Roadmap", "Hiring", "Fixing Bugs"]
+  ignoredTopics: string[];  // e.g. ["Lunch plans", "Fantasy Football"]
 }
