@@ -9,21 +9,40 @@ const MAX_PAGES = 10;
 function cleanSlackText(text: string, context?: SlackContext): string {
   if (!text) return "";
   
-  let cleaned = text
+  let cleaned = text;
+
+  // 1. Resolve User Mentions: <@U12345> or <@U12345|bob>
+  // We prioritize the context map, but fallback to the label inside the tag if available.
+  cleaned = cleaned.replace(/<@(U[A-Z0-9]+)(?:\|([^>]+))?>/g, (_, userId, label) => {
+    if (context && context.userMap[userId]) {
+      return `@${context.userMap[userId].real_name}`;
+    }
+    return label ? `@${label}` : `@UnknownUser`;
+  });
+
+  // 2. Resolve User Groups: <!subteam^S12345> or <!subteam^S12345|@engineering>
+  cleaned = cleaned.replace(/<!subteam\^(S[A-Z0-9]+)(?:\|([^>]+))?>/g, (_, groupId, label) => {
+    if (context && context.groupMap && context.groupMap[groupId]) {
+      return `@${context.groupMap[groupId]}`;
+    }
+    return label ? `${label}` : `@UnknownGroup`;
+  });
+
+  // 3. Resolve Special Mentions: <!here>, <!channel>, <!everyone>
+  cleaned = cleaned.replace(/<!(here|channel|everyone)(?:\|([^>]+))?>/g, (_, type) => {
+    return `@${type}`;
+  });
+
+  // 4. Clean formatting and links
+  cleaned = cleaned
     .replace(/&gt;/g, '')    
     .replace(/&lt;/g, '<')   
     .replace(/&amp;/g, '&')
-    .replace(/<http.*?>/g, '')     
+    .replace(/<http.*?>/g, '') // Remove bare links, keep text links if formatted differently? 
+    // Actually, slack links are <url|text>. Let's keep the text if present.
+    .replace(/<(https?:\/\/[^|]+)\|([^>]+)>/g, '$2') // <link|text> -> text
+    .replace(/<(https?:\/\/[^>]+)>/g, '') // <link> -> (empty, or keep link?) - keeping empty to reduce noise
     .replace(/\s+/g, ' ');
-
-  if (context && Object.keys(context.userMap).length > 0) {
-    cleaned = cleaned.replace(/<@(U[A-Z0-9]+)>/g, (_, userId) => {
-      const user = context.userMap[userId];
-      return user ? `@${user.real_name}` : `@${userId}`;
-    });
-  } else {
-    cleaned = cleaned.replace(/<@.*?>/g, '');
-  }
 
   return cleaned.trim();
 }
@@ -60,22 +79,23 @@ async function fetchAllPages(url: string, limit = 1000): Promise<any[]> {
   try {
     do {
       const cursorParam = nextCursor ? `&cursor=${encodeURIComponent(nextCursor)}` : '';
-      const response = await fetch(`${url}&limit=${limit}${cursorParam}`, {
+      const separator = url.includes('?') ? '&' : '?';
+      const response = await fetch(`${url}${separator}limit=${limit}${cursorParam}`, {
         headers: { 'Authorization': `Bearer ${SLACK_TOKEN}` }
       });
       const data = await response.json() as any;
       
       if (!data.ok) {
         if (data.error === 'missing_scope') {
-            console.error(`🚨 PERMISSION ERROR: Your Slack Token is missing required scopes.`);
-            console.error(`👉 Please add: channels:read, groups:read, im:read, mpim:read to 'User Token Scopes' in your Slack App settings.`);
+            console.error(`🚨 PERMISSION ERROR: Missing scope for ${url}`);
         } else {
             console.warn(`⚠️ Slack API Error (${url}):`, data.error);
         }
         break;
       }
       
-      const items = data.members || data.channels || [];
+      // Handle different list types
+      const items = data.members || data.channels || data.usergroups || [];
       allItems = [...allItems, ...items];
       
       nextCursor = data.response_metadata?.next_cursor;
@@ -104,7 +124,7 @@ export async function buildSlackContext(): Promise<SlackContext> {
 
   // 1. Fetch Users
   const userMap: Record<string, SlackUser> = {};
-  const users = await fetchAllPages('https://slack.com/api/users.list?');
+  const users = await fetchAllPages('https://slack.com/api/users.list');
   users.forEach((u: any) => {
     userMap[u.id] = {
       id: u.id,
@@ -114,7 +134,16 @@ export async function buildSlackContext(): Promise<SlackContext> {
     };
   });
 
-  // 2. Fetch Channels (SPLIT STRATEGY)
+  // 2. Fetch User Groups (NEW: Fix for unreadable Group IDs)
+  const groupMap: Record<string, string> = {};
+  try {
+    const groups = await fetchAllPages('https://slack.com/api/usergroups.list?include_disabled=false');
+    groups.forEach((g: any) => {
+        groupMap[g.id] = g.handle || g.name; // e.g. "engineering" or "dev-team"
+    });
+  } catch (e) { console.warn("Could not fetch user groups (scope: usergroups:read might be missing)"); }
+
+  // 3. Fetch Channels
   const channelMap: Record<string, SlackChannel> = {};
   
   const [publicCh, privateCh, mpims, ims] = await Promise.all([
@@ -127,8 +156,7 @@ export async function buildSlackContext(): Promise<SlackContext> {
   const allChannels = [...publicCh, ...privateCh, ...mpims, ...ims];
 
   allChannels.forEach((c: any) => {
-    // FILTER: Skip archived/deleted channels to keep the list manageable
-    if (c.is_archived) return;
+    if (c.is_archived) return; // Skip archived
 
     channelMap[c.id] = {
       id: c.id,
@@ -140,8 +168,8 @@ export async function buildSlackContext(): Promise<SlackContext> {
     };
   });
 
-  console.log(`✅ Context Built: ${Object.keys(userMap).length} users, ${Object.keys(channelMap).length} active channels/DMs.`);
-  return { userMap, channelMap, selfId };
+  console.log(`✅ Context Built: ${Object.keys(userMap).length} users, ${Object.keys(groupMap).length} groups, ${Object.keys(channelMap).length} channels.`);
+  return { userMap, channelMap, groupMap, selfId };
 }
 
 // --- 3. INTELLIGENT PARSER ---
@@ -169,7 +197,6 @@ function resolveSourceLabel(match: any, context: SlackContext): string {
 
   const channelId = typeof channelObj === 'string' ? channelObj : channelObj.id;
   
-  // STRATEGY 1: Use Reference Map (Source of Truth)
   const channel = context.channelMap[channelId];
   if (channel) {
     if (channel.is_im && channel.user_id) {
@@ -182,15 +209,10 @@ function resolveSourceLabel(match: any, context: SlackContext): string {
     if (channel.name) return `#${channel.name}`;
   }
 
-  // STRATEGY 2: Fail-Safe (Use Name from Search Result if available)
   if (channelObj.name && channelObj.name !== channelId) {
       const name = channelObj.name;
       if (name.startsWith("mpdm-")) return parseGroupDmName(name, context);
-      
-      // Better regex to ignore raw IDs (e.g. C024..., G051..., D02...)
-      // Standard Slack IDs are uppercase alphanumeric, ~9-11 chars
       const isId = /^[A-Z][A-Z0-9]{8,12}$/.test(name);
-      
       if (!isId) return `#${name}`;
   }
 
@@ -213,7 +235,10 @@ function parseMessage(match: any, context: SlackContext): UnifiedTask {
   }
 
   const uniqueId = `slack-${rawChannelId}-${msgId}`;
+  
+  // FIX: This now properly resolves IDs using the new logic
   let title = cleanSlackText(match.text, context);
+  
   let provider: 'slack' | 'gdrive' | 'notion' = 'slack';
   let url = extractLink(match);
 
@@ -289,17 +314,11 @@ export async function fetchSlackSignals(
 
     const filteredMatches = allMatches.filter((match: any) => {
         if (!match.ts) return false;
-        
-        // Date Check
         const msgDate = new Date(parseFloat(match.ts) * 1000);
         if (startDate && msgDate < startDate) return false;
         if (endDate && msgDate > endDate) return false; 
-        
-        // Ignore Asana Bot
         if (match.username === 'asana') return false; 
-
-        // CRITICAL: Filter out messages from channels not in our ACTIVE channelMap.
-        // This effectively excludes archived or deleted channels since they weren't added to channelMap in buildSlackContext.
+        
         const channelId = typeof match.channel === 'string' ? match.channel : match.channel?.id;
         if (channelId && !context.channelMap[channelId]) {
             return false;
@@ -316,6 +335,7 @@ export async function fetchSlackSignals(
   }
 }
 
+// NOTE: This now uses fetchSlackSignals internally so it benefits from the cleaning logic
 export async function fetchRichSignals(
   context: SlackContext,
   startDate?: Date, 

@@ -19,6 +19,7 @@ export interface UnifiedTask {
 export interface SlackContext {
   userMap: Record<string, SlackUser>;
   channelMap: Record<string, SlackChannel>;
+  groupMap: Record<string, string>; // NEW: Maps Group ID (S123) -> Name (@devs)
   selfId: string;
 }
 
@@ -42,6 +43,6 @@ export interface UserProfile {
   name: string;
   title: string;
   roleDescription: string;
-  keyPriorities: string[];  // e.g. ["Q3 Roadmap", "Hiring", "Fixing Bugs"]
-  ignoredTopics: string[];  // e.g. ["Lunch plans", "Fantasy Football"]
+  keyPriorities: string[];
+  ignoredTopics: string[];
 }
