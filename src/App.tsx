@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import { UnifiedTask, SlackContext, UserProfile } from "./types/unified";
 import { TaskCard } from "./components/TaskCard";
 import { UserProfileModal } from "./components/UserProfileModal"; 
-import { fetchSlackSignals, buildSlackContext } from "./adapters/slack"; // Removed fetchRichSignals
+import { fetchSlackSignals, buildSlackContext } from "./adapters/slack"; 
 import { fetchAsanaTasks, completeAsanaTask, getProjectList, createAsanaTaskWithProject, createAsanaSubtask } from "./adapters/asana";
 import { analyzeSignal, synthesizeWorkload, ProposedTask, AiSuggestion } from "./adapters/gemini"; 
 import { RefreshCw, LayoutTemplate, Sparkles, X, Check, Inbox, Filter, BrainCircuit, Calendar, Trash2, RotateCcw, Archive, Search, User } from "lucide-react"; 
@@ -51,6 +51,24 @@ function App() {
   useEffect(() => { 
     localStorage.setItem("meta_blocked_filters", JSON.stringify(blockedFilters)); 
   }, [blockedFilters]);
+
+  // --- DERIVED STATE MOVED UP (FIX for Archive All) ---
+  const visibleSlackTasks = slackTasks.filter(t => {
+    const chKey = `channel:${t.metadata.sourceLabel}`;
+    const userKey = `author:${t.metadata.author}`;
+    return !blockedFilters.includes(chKey) && !blockedFilters.includes(userKey);
+  });
+
+  const availableFilters = useMemo(() => {
+    const channels = new Set<string>();
+    const authors = new Set<string>();
+    slackTasks.forEach(t => { 
+        if(t.metadata.sourceLabel) channels.add(t.metadata.sourceLabel); 
+        if(t.metadata.author) authors.add(t.metadata.author); 
+    });
+    return { channels: Array.from(channels).sort(), authors: Array.from(authors).sort() };
+  }, [slackTasks]);
+  // ----------------------------------------------------
 
   const getArchivedIds = (): string[] => {
     const stored = localStorage.getItem("meta_archived_ids");
@@ -172,12 +190,6 @@ function App() {
     setLoading(false);
   };
 
-  const visibleSlackTasks = slackTasks.filter(t => {
-    const chKey = `channel:${t.metadata.sourceLabel}`;
-    const userKey = `author:${t.metadata.author}`;
-    return !blockedFilters.includes(chKey) && !blockedFilters.includes(userKey);
-  });
-
   const handleSynthesize = async () => {
     if (!slackContext) return;
     setLoading(true);
@@ -240,16 +252,6 @@ function App() {
     });
   };
 
-  const availableFilters = useMemo(() => {
-    const channels = new Set<string>();
-    const authors = new Set<string>();
-    slackTasks.forEach(t => { 
-        if(t.metadata.sourceLabel) channels.add(t.metadata.sourceLabel); 
-        if(t.metadata.author) authors.add(t.metadata.author); 
-    });
-    return { channels: Array.from(channels).sort(), authors: Array.from(authors).sort() };
-  }, [slackTasks]);
-
   const renderFlatList = (tasks: UnifiedTask[]) => {
       return (
         <div className="space-y-1">
@@ -308,15 +310,21 @@ function App() {
                 )}
             </div>
             
-            <button onClick={() => setShowProfileModal(true)} className={`p-2 border rounded-lg transition ${userProfile ? 'bg-purple-50 text-purple-700 border-purple-200' : 'bg-white text-gray-500 hover:bg-gray-50'}`} title="User Profile">
-                <User size={16} />
+            <button onClick={() => setShowProfileModal(true)} className={`flex items-center gap-2 border px-3 py-2 rounded-lg transition font-medium text-sm ${userProfile ? 'bg-purple-50 text-purple-700 border-purple-200' : 'bg-white text-gray-700 hover:bg-gray-50'}`} title="User Profile">
+                <User size={16} /> Profile
             </button>
 
-            <button onClick={clearArchive} className="p-2 bg-white border rounded-lg hover:bg-red-50 text-gray-500 hover:text-red-600 transition" title="Reset Archive"><Trash2 size={16} /></button>
+            <button onClick={clearArchive} className="flex items-center gap-2 bg-white border px-3 py-2 rounded-lg hover:bg-red-50 text-gray-700 hover:text-red-600 transition font-medium text-sm" title="Reset Archive">
+                <Trash2 size={16} /> Reset
+            </button>
+
             {blockedFilters.length > 0 && <button onClick={clearFilters} className="flex items-center gap-2 bg-purple-100 text-purple-700 px-3 py-2 rounded-lg text-sm font-bold"><RotateCcw size={14}/> Clear ({blockedFilters.length})</button>}
+            
             <button onClick={handleSynthesize} disabled={!slackContext} className="flex items-center gap-2 bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition font-bold text-sm disabled:opacity-50"><BrainCircuit size={16} /> {loading ? "..." : "Synthesize"}</button>
-            <button onClick={() => setShowFilterModal(true)} className={`flex items-center gap-2 border px-3 py-2 rounded-lg transition font-medium text-sm ${blockedFilters.length ? 'bg-purple-50 border-purple-200 text-purple-700' : 'bg-white'}`}><Filter size={16} /> Filters</button>
-            <button onClick={() => slackContext && sync(slackContext)} disabled={!slackContext} className="flex items-center gap-2 bg-white border px-4 py-2 rounded-lg hover:bg-gray-50 transition font-medium text-sm disabled:opacity-50"><RefreshCw size={16} className={loading ? "animate-spin" : ""} /> Sync</button>
+            
+            <button onClick={() => setShowFilterModal(true)} className={`flex items-center gap-2 border px-3 py-2 rounded-lg transition font-medium text-sm ${blockedFilters.length ? 'bg-purple-50 border-purple-200 text-purple-700' : 'bg-white text-gray-700'}`}><Filter size={16} /> Filters</button>
+            
+            <button onClick={() => slackContext && sync(slackContext)} disabled={!slackContext} className="flex items-center gap-2 bg-white border px-4 py-2 rounded-lg hover:bg-gray-50 text-gray-700 transition font-medium text-sm disabled:opacity-50"><RefreshCw size={16} className={loading ? "animate-spin" : ""} /> Sync</button>
         </div>
       </div>
 
