@@ -5,7 +5,7 @@ import { UserProfileModal } from "./components/UserProfileModal";
 import { fetchSlackSignals, buildSlackContext } from "./adapters/slack"; 
 import { fetchAsanaTasks, completeAsanaTask, getProjectList, createAsanaTaskWithProject, createAsanaSubtask } from "./adapters/asana";
 import { analyzeSignal, synthesizeWorkload, ProposedTask, AiSuggestion } from "./adapters/gemini"; 
-import { RefreshCw, LayoutTemplate, Sparkles, X, Check, Inbox, Filter, BrainCircuit, Calendar, Trash2, RotateCcw, Archive, Search, User } from "lucide-react"; 
+import { RefreshCw, LayoutTemplate, Sparkles, X, Check, Inbox, Filter, BrainCircuit, Calendar, Trash2, RotateCcw, Archive, Search, User, AlertTriangle } from "lucide-react"; 
 import "./App.css";
 
 type TimeRange = 'today' | '3days' | 'week' | '2weeks' | 'month' | 'year' | 'custom';
@@ -27,6 +27,7 @@ function App() {
   const [synthesisResults, setSynthesisResults] = useState<ProposedTask[] | null>(null);
   const [showFilterModal, setShowFilterModal] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
+  const [showArchiveConfirm, setShowArchiveConfirm] = useState(false); // NEW: State for archive modal
   const [processingTaskIdx, setProcessingTaskIdx] = useState<number | null>(null);
   
   const [filterSearch, setFilterSearch] = useState("");
@@ -52,7 +53,7 @@ function App() {
     localStorage.setItem("meta_blocked_filters", JSON.stringify(blockedFilters)); 
   }, [blockedFilters]);
 
-  // --- DERIVED STATE MOVED UP (FIX for Archive All) ---
+  // --- DERIVED STATE ---
   const visibleSlackTasks = slackTasks.filter(t => {
     const chKey = `channel:${t.metadata.sourceLabel}`;
     const userKey = `author:${t.metadata.author}`;
@@ -68,7 +69,7 @@ function App() {
     });
     return { channels: Array.from(channels).sort(), authors: Array.from(authors).sort() };
   }, [slackTasks]);
-  // ----------------------------------------------------
+  // --------------------
 
   const getArchivedIds = (): string[] => {
     const stored = localStorage.getItem("meta_archived_ids");
@@ -152,12 +153,20 @@ function App() {
     setSlackTasks(prev => prev.filter(t => t.id !== id));
   };
 
-  const handleArchiveAll = () => {
-    if (!visibleSlackTasks.length || !confirm("Archive all visible signals?")) return;
+  // 1. Opens the Confirmation Modal
+  const requestArchiveAll = () => {
+    if (visibleSlackTasks.length === 0) return;
+    setShowArchiveConfirm(true);
+  };
+
+  // 2. Executes the logic when "Confirm" is clicked in the Modal
+  const executeArchiveAll = () => {
     const current = getArchivedIds();
     const newIds = visibleSlackTasks.map(t => t.id);
     localStorage.setItem("meta_archived_ids", JSON.stringify([...current, ...newIds]));
+    
     setSlackTasks(prev => prev.filter(t => !newIds.includes(t.id)));
+    setShowArchiveConfirm(false);
   };
 
   const handleCompleteTask = async (taskId: string) => {
@@ -194,17 +203,15 @@ function App() {
     if (!slackContext) return;
     setLoading(true);
 
-    // OPTIMIZATION: Use visibleSlackTasks instead of fetching new signals
     if (visibleSlackTasks.length === 0) { alert("No signals to synthesize."); setLoading(false); return; }
 
-    // Transform UnifiedTask[] -> Format expected by Gemini Adapter
     const richSignals = visibleSlackTasks.map(task => ({
         id: task.id, 
         mainMessage: { 
             text: task.title, 
             user: task.metadata.author 
         }, 
-        thread: [], // Current implementation doesn't fetch threads anyway
+        thread: [], 
         source: 'slack',
         channelName: task.metadata.sourceLabel 
     }));
@@ -332,7 +339,7 @@ function App() {
          <div className="flex flex-col gap-4">
             <div className="flex justify-between items-center">
                 <h2 className="text-sm font-bold text-gray-500 uppercase tracking-wider flex items-center gap-2">Signals <span className="bg-purple-100 text-purple-700 text-xs px-2 py-0.5 rounded-full">{visibleSlackTasks.length}</span></h2>
-                {visibleSlackTasks.length > 0 && <button onClick={handleArchiveAll} className="text-xs flex items-center gap-1 text-gray-400 hover:text-gray-600"><Archive size={14} /> Archive All</button>}
+                {visibleSlackTasks.length > 0 && <button onClick={requestArchiveAll} className="text-xs flex items-center gap-1 text-gray-400 hover:text-gray-600"><Archive size={14} /> Archive All</button>}
             </div>
             {renderFlatList(visibleSlackTasks)}
          </div>
@@ -349,6 +356,38 @@ function App() {
             onSave={handleSaveProfile} 
             onClose={() => setShowProfileModal(false)} 
         />
+      )}
+
+      {/* NEW: Custom Archive Confirmation Modal */}
+      {showArchiveConfirm && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-sm w-full p-6">
+            <div className="flex flex-col items-center text-center gap-4">
+              <div className="p-3 bg-yellow-100 rounded-full text-yellow-600">
+                <AlertTriangle size={32} />
+              </div>
+              <h3 className="text-lg font-bold text-gray-900">Archive All Signals?</h3>
+              <p className="text-sm text-gray-500">
+                Are you sure you want to archive <b>{visibleSlackTasks.length}</b> visible signals? 
+                This will remove them from your main view.
+              </p>
+              <div className="flex gap-3 w-full mt-2">
+                <button 
+                  onClick={() => setShowArchiveConfirm(false)} 
+                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-gray-700 font-medium hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={executeArchiveAll} 
+                  className="flex-1 px-4 py-2 bg-black text-white rounded-lg font-bold hover:bg-gray-800"
+                >
+                  Yes, Archive
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {showFilterModal && (
