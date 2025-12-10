@@ -544,7 +544,7 @@ function App() {
                 </div>
                 <div className="flex-1 overflow-y-auto p-6 space-y-6">
                     {synthesisResults.map((task, i) => (
-                        <div key={i} className="border rounded-xl p-6 hover:shadow-lg transition">
+                        <div key={`synthesis-${i}`} className="border rounded-xl p-6 hover:shadow-lg transition">
                             <div className="flex justify-between items-start">
                                 <div>
                                     <div className="flex items-center gap-2 mb-2">
@@ -552,7 +552,7 @@ function App() {
                                         <h3 className="text-lg font-bold">{task.title}</h3>
                                     </div>
                                     <p className="text-gray-600 mb-4">{task.description}</p>
-                                    <ul className="list-disc pl-5 space-y-1 mb-4 text-sm text-gray-700">{task.subtasks.map(s => <li key={s}>{s}</li>)}</ul>
+                                    <ul className="list-disc pl-5 space-y-1 mb-4 text-sm text-gray-700">{task.subtasks.map((s, sIdx) => <li key={`subtask-${i}-${sIdx}`}>{s}</li>)}</ul>
                                     <div className="text-xs text-gray-400">Sources: {task.citations.join(", ")}</div>
                                 </div>
                                 <div className="flex flex-col gap-2">
