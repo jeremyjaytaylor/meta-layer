@@ -3,9 +3,8 @@ import { UnifiedTask, SlackContext, SlackUser, SlackChannel } from '../types/uni
 
 const SLACK_TOKEN = import.meta.env.VITE_SLACK_TOKEN;
 const MAX_PAGES = 10;
-const MAX_ITEMS_PER_FETCH = 1000; // Prevent unbounded memory growth
+const MAX_ITEMS_PER_FETCH = 1000;
 
-// Validate token early
 if (!SLACK_TOKEN) {
   throw new Error("VITE_SLACK_TOKEN environment variable is not set. Please configure it in your .env file.");
 }
@@ -17,7 +16,6 @@ function cleanSlackText(text: string, context?: SlackContext): string {
   
   let cleaned = text;
 
-  // 1. Resolve User Mentions: <@U12345> or <@U12345|bob>
   cleaned = cleaned.replace(/<@(U[A-Z0-9]+)(?:\|([^>]+))?>/g, (_, userId, label) => {
     if (context && context.userMap && context.userMap[userId]) {
       return `@${context.userMap[userId].real_name}`;
@@ -25,7 +23,6 @@ function cleanSlackText(text: string, context?: SlackContext): string {
     return label ? `@${label}` : `@UnknownUser`;
   });
 
-  // 2. Resolve User Groups: <!subteam^S12345> or <!subteam^S12345|@engineering>
   cleaned = cleaned.replace(/<!subteam\^(S[A-Z0-9]+)(?:\|([^>]+))?>/g, (_, groupId, label) => {
     if (context && context.groupMap && context.groupMap[groupId]) {
       return `@${context.groupMap[groupId]}`;
@@ -33,48 +30,41 @@ function cleanSlackText(text: string, context?: SlackContext): string {
     return label ? `${label}` : `@UnknownGroup`;
   });
 
-  // 3. Resolve Special Mentions: <!here>, <!channel>, <!everyone>
   cleaned = cleaned.replace(/<!(here|channel|everyone)(?:\|([^>]+))?>/g, (_, type) => {
     return `@${type}`;
   });
 
-  // 4. Clean formatting and links - PRESERVE TEXT LINKS
   cleaned = cleaned
     .replace(/&gt;/g, '>')    
     .replace(/&lt;/g, '<')   
     .replace(/&amp;/g, '&')
-    .replace(/<(https?:\/\/[^|]+)\|([^>]+)>/g, '$2') // <link|text> -> text (preserve text)
-    .replace(/<(https?:\/\/[^>]+)>/g, '$1') // <link> -> link (preserve URL)
+    .replace(/<(https?:\/\/[^|]+)\|([^>]+)>/g, '$2')
+    .replace(/<(https?:\/\/[^>]+)>/g, '$1')
     .replace(/\s+/g, ' ');
 
   return cleaned.trim();
 }
 
 function extractLink(match: any): string {
-  // Try files first
   if (match.files && Array.isArray(match.files) && match.files.length > 0) {
     return match.files[0].permalink || match.files[0].url_private || "";
   }
   
-  // Try blocks for Google Docs
   if (match.blocks && Array.isArray(match.blocks)) {
       const rawBlocks = JSON.stringify(match.blocks);
       const blockMatch = rawBlocks.match(/\*<(https:\/\/docs\.google\.com\/[^|]+)\|([^>]+)>\*/);
       if (blockMatch) return blockMatch[1];
   }
   
-  // Try text for links
   if (match.text && typeof match.text === 'string') {
     const textLink = match.text.match(/<(https?:\/\/[^|>]+)/);
     if (textLink) return textLink[1];
   }
 
-  // Try permalink
   if (match.permalink && typeof match.permalink === 'string') {
     return match.permalink;
   }
 
-  // Generate Slack link
   if (match.ts && match.channel) {
       const channelId = typeof match.channel === 'string' ? match.channel : match.channel?.id;
       if (channelId) {
@@ -93,7 +83,7 @@ async function fetchAllPages(url: string, limit = 1000): Promise<any[]> {
   
   try {
     do {
-      if (pageCount >= MAX_PAGES) break; // Enforce max pages
+      if (pageCount >= MAX_PAGES) break;
       
       const cursorParam = nextCursor ? `&cursor=${encodeURIComponent(nextCursor)}` : '';
       const separator = url.includes('?') ? '&' : '?';
@@ -117,7 +107,6 @@ async function fetchAllPages(url: string, limit = 1000): Promise<any[]> {
         break;
       }
       
-      // Handle different list types
       const items = data.members || data.channels || data.usergroups || [];
       if (Array.isArray(items)) {
         allItems = [...allItems, ...items];
@@ -155,7 +144,6 @@ export async function buildSlackContext(): Promise<SlackContext> {
     console.error("Auth Check Failed", e); 
   }
 
-  // 1. Fetch Users
   const userMap: Record<string, SlackUser> = {};
   const users = await fetchAllPages('https://slack.com/api/users.list');
   users.forEach((u: any) => {
@@ -169,7 +157,6 @@ export async function buildSlackContext(): Promise<SlackContext> {
     }
   });
 
-  // 2. Fetch User Groups
   const groupMap: Record<string, string> = {};
   try {
     const groups = await fetchAllPages('https://slack.com/api/usergroups.list?include_disabled=false');
@@ -182,7 +169,6 @@ export async function buildSlackContext(): Promise<SlackContext> {
     console.warn("Could not fetch user groups (scope: usergroups:read might be missing)"); 
   }
 
-  // 3. Fetch Channels
   const channelMap: Record<string, SlackChannel> = {};
   
   try {
@@ -197,7 +183,7 @@ export async function buildSlackContext(): Promise<SlackContext> {
 
     allChannels.forEach((c: any) => {
       if (!c.id) return;
-      if (c.is_archived) return; // Skip archived
+      if (c.is_archived) return;
 
       channelMap[c.id] = {
         id: c.id,
@@ -330,7 +316,34 @@ function parseMessage(match: any, context: SlackContext): UnifiedTask {
   };
 }
 
-// --- 4. MAIN FETCHERS ---
+// --- 4. CONVERSATION HISTORY FETCHER (FOR PRIVATE CHANNELS) ---
+
+async function fetchChannelHistory(channelId: string, startDate: Date, endDate: Date): Promise<any[]> {
+  try {
+    const oldest = Math.floor(startDate.getTime() / 1000);
+    const latest = Math.floor(endDate.getTime() / 1000);
+    
+    const response = await fetch(
+      `https://slack.com/api/conversations.history?channel=${channelId}&oldest=${oldest}&latest=${latest}&limit=100`,
+      { headers: { 'Authorization': `Bearer ${SLACK_TOKEN}` } }
+    );
+
+    if (!response.ok) return [];
+    const data = await response.json() as any;
+    if (!data.ok) {
+      if (data.error !== 'channel_not_found') {
+        console.warn(`⚠️ Error fetching history for ${channelId}:`, data.error);
+      }
+      return [];
+    }
+    return Array.isArray(data.messages) ? data.messages : [];
+  } catch (e) {
+    console.error(`Error fetching history for ${channelId}:`, e);
+    return [];
+  }
+}
+
+// --- 5. MAIN FETCHERS ---
 
 export async function fetchSlackSignals(
   context: SlackContext, 
@@ -343,23 +356,26 @@ export async function fetchSlackSignals(
       return [];
     }
 
-    let queryString = `*`;
-    const encodedQuery = encodeURIComponent(queryString);
-    
+    const now = new Date();
+    const defaultEnd = endDate || now;
+    const defaultStart = startDate || new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000); // Default 7 days
+
     let allMatches: any[] = [];
-    let page = 1;
 
-    console.log(`📥 Slack Query: ${queryString}`);
+    // FIX: Fetch from both search.messages API AND conversation history for private channels
+    console.log(`📥 Fetching Slack messages from ${defaultStart.toLocaleDateString()} to ${defaultEnd.toLocaleDateString()}`);
 
-    while (page <= MAX_PAGES) {
+    // 1. Try search.messages for broader coverage
+    try {
+      const encodedQuery = encodeURIComponent('*');
+      let page = 1;
+      
+      while (page <= MAX_PAGES) {
         const response = await fetch(`https://slack.com/api/search.messages?query=${encodedQuery}&sort=timestamp&sort_dir=desc&count=100&page=${page}`, {
             headers: { 'Authorization': `Bearer ${SLACK_TOKEN}` },
         });
 
-        if (!response.ok) {
-          console.error(`API error on page ${page}: ${response.status}`);
-          break;
-        }
+        if (!response.ok) break;
 
         const data = await response.json() as any;
         if (!data.ok || !data.messages || !data.messages.matches) break;
@@ -367,14 +383,47 @@ export async function fetchSlackSignals(
         allMatches = [...allMatches, ...data.messages.matches];
         if (page >= (data.messages.paging?.pages || 1)) break;
         page++;
+      }
+      console.log(`✅ Found ${allMatches.length} messages via search.messages`);
+    } catch (e) {
+      console.warn("⚠️ search.messages failed, will use conversation history:", e);
     }
 
-    const now = new Date();
-    const defaultEnd = endDate || now;
-    const defaultStart = startDate || new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000); // Default 7 days
+    // 2. ALSO fetch from private channels directly to ensure coverage
+    const privateChannels = Object.values(context.channelMap).filter(ch => 
+      ch.is_channel && !ch.is_im && !ch.is_mpim
+    );
+    
+    console.log(`📝 Fetching from ${privateChannels.length} private channels directly...`);
+    
+    for (const channel of privateChannels) {
+      try {
+        const historyMessages = await fetchChannelHistory(channel.id, defaultStart, defaultEnd);
+        if (historyMessages.length > 0) {
+          // Add channel info to messages for proper parsing
+          const withChannel = historyMessages.map((msg: any) => ({
+            ...msg,
+            channel: channel.id
+          }));
+          allMatches = [...allMatches, ...withChannel];
+          console.log(`  📄 ${channel.name}: ${historyMessages.length} messages`);
+        }
+      } catch (e) {
+        console.warn(`  ⚠️ Error fetching ${channel.name}:`, e);
+      }
+    }
 
+    console.log(`✅ Total ${allMatches.length} messages fetched`);
+
+    // 3. Filter and deduplicate
+    const seen = new Set<string>();
     const filteredMatches = allMatches.filter((match: any) => {
         if (!match.ts) return false;
+        
+        // Deduplicate by ts + channel
+        const dedupeKey = `${match.ts}-${typeof match.channel === 'string' ? match.channel : match.channel?.id}`;
+        if (seen.has(dedupeKey)) return false;
+        seen.add(dedupeKey);
         
         try {
           const msgDate = new Date(parseFloat(match.ts) * 1000);
@@ -386,11 +435,6 @@ export async function fetchSlackSignals(
         
         if (match.username === 'asana') return false; 
         
-        const channelId = typeof match.channel === 'string' ? match.channel : match.channel?.id;
-        if (channelId && !context.channelMap[channelId]) {
-            return false;
-        }
-
         return true;
     });
 
