@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { X, Save, User } from "lucide-react";
 import { UserProfile } from "../types/unified";
 

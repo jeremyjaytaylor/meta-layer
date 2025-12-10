@@ -1,8 +1,13 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { UserProfile } from "../types/unified";
 
-// SECURE: Load from environment variable
-const API_KEY = import.meta.env.VITE_GEMINI_API_KEY; 
+// SECURE: Load from environment variable with validation
+const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
+
+// Validate API key early
+if (!API_KEY) {
+  throw new Error("VITE_GEMINI_API_KEY environment variable is not set. Please configure it in your .env file.");
+}
 
 const genAI = new GoogleGenerativeAI(API_KEY);
 
@@ -10,14 +15,12 @@ export interface ParsedMessage { msgId: string; suggestedProject: string; }
 export interface ProposedTask { title: string; description: string; project: string; subtasks: string[]; citations: string[]; }
 export interface AiSuggestion { title: string; projectName: string; reasoning: string; }
 
-// STRATEGY: Stable Cascade
+// STRATEGY: Stable Cascade - Only use valid, existing models
 const MODEL_CASCADE = [
-  "gemini-2.5-flash",
-  "gemini-2.5-pro",
-  "gemini-2.0-flash-exp",
+  "gemini-2.0-flash",
+  "gemini-2.0-pro",
   "gemini-1.5-flash",
   "gemini-1.5-pro",
-  "gemini-pro"
 ];
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -28,7 +31,7 @@ function minifySignals(signals: any[]): any[] {
     let content = s.mainMessage?.text || "";
     
     // Append File Preview (Email Body)
-    if (s.mainMessage?.files && s.mainMessage.files.length > 0) {
+    if (s.mainMessage?.files && Array.isArray(s.mainMessage.files) && s.mainMessage.files.length > 0) {
         const f = s.mainMessage.files[0];
         if (f.title) content += `\n[File/Email Subject: ${f.title}]`;
         if (f.preview) content += `\n[File/Email Content: ${f.preview}]`;
@@ -39,13 +42,13 @@ function minifySignals(signals: any[]): any[] {
       channel: s.channelName, 
       text: content,
       user: s.mainMessage?.username || s.mainMessage?.user,
-      replies: s.thread ? s.thread.map((t: any) => ({ user: t.user, text: t.text })) : []
+      replies: Array.isArray(s.thread) ? s.thread.map((t: any) => ({ user: t.user, text: t.text })) : []
     };
   });
 }
 
 async function runWithCascade(prompt: string, maxRetriesPerModel: number): Promise<any> {
-  let lastError = null;
+  let lastError: Error | null = null;
 
   for (const modelName of MODEL_CASCADE) {
     const model = genAI.getGenerativeModel({ model: modelName });
@@ -57,11 +60,18 @@ async function runWithCascade(prompt: string, maxRetriesPerModel: number): Promi
         const result = await model.generateContent(prompt);
         const text = result.response.text();
         const cleanJson = text.replace(/```json|```/g, '').trim();
+        
+        // Validate JSON before parsing
+        if (!cleanJson) {
+          throw new Error("Empty response from model");
+        }
+        
         return JSON.parse(cleanJson);
 
       } catch (error: any) {
         const msg = error.message || "";
         lastError = error;
+        console.error(`Error on ${modelName} attempt ${attempt}:`, msg);
 
         if ((msg.includes("429") || msg.includes("503")) && attempt < maxRetriesPerModel) {
           const delay = 2000 * Math.pow(2, attempt); 
@@ -70,31 +80,55 @@ async function runWithCascade(prompt: string, maxRetriesPerModel: number): Promi
           continue; 
         }
 
-        if (msg.includes("404") || msg.includes("not found")) break; 
+        if (msg.includes("404") || msg.includes("not found")) {
+          console.warn(`Model ${modelName} not available, trying next...`);
+          break;
+        }
         break;
       }
     }
   }
   
-  throw lastError || new Error("All models failed.");
+  throw lastError || new Error("All models failed. Check your API key and network connection.");
 }
 
 export async function smartParseSlack(
   rawMessages: any[], 
   availableProjects: string[]
 ): Promise<Record<string, ParsedMessage>> {
-  return {};
+  if (!Array.isArray(rawMessages) || rawMessages.length === 0) {
+    return {};
+  }
+
+  const prompt = `
+    Parse these Slack messages into structured tasks.
+    Messages: ${JSON.stringify(rawMessages.slice(0, 50))}
+    Available Projects: ${JSON.stringify(availableProjects)}
+    
+    Output JSON Object format (map message ID to suggestion):
+    {
+      "messageId1": { "msgId": "messageId1", "suggestedProject": "Project Name" },
+      "messageId2": { "msgId": "messageId2", "suggestedProject": "My Tasks" }
+    }
+  `;
+
+  try {
+    return await runWithCascade(prompt, 1);
+  } catch (e) {
+    console.error("smartParseSlack failed:", e);
+    return {};
+  }
 }
 
 export async function synthesizeWorkload(
   activeSignals: any[], 
-  archivedContext: any[],
+  _archivedContext: any[],
   availableProjects: string[] | null,
   userProfile: UserProfile | null
 ): Promise<ProposedTask[]> {
 
   const cleanSignals = minifySignals(activeSignals);
-  const projectList = availableProjects ? JSON.stringify(availableProjects) : "[]";
+  const projectList = availableProjects && Array.isArray(availableProjects) ? JSON.stringify(availableProjects) : "[]";
 
   let personaContext = "You are a Chief of Staff.";
   let prioritizationInstructions = "Cluster related threads into Major Tasks.";
@@ -105,8 +139,8 @@ export async function synthesizeWorkload(
       
       USER CONTEXT:
       - **Role Description**: ${userProfile.roleDescription}
-      - **Key Priorities**: ${userProfile.keyPriorities.join(", ")}
-      - **Topics to IGNORE**: ${userProfile.ignoredTopics.join(", ")}
+      - **Key Priorities**: ${userProfile.keyPriorities?.join(", ") || "None specified"}
+      - **Topics to IGNORE**: ${userProfile.ignoredTopics?.join(", ") || "None specified"}
     `;
 
     prioritizationInstructions = `
@@ -131,7 +165,7 @@ export async function synthesizeWorkload(
     5. Create subtasks for specific actions.
     6. CITE SOURCES (Who said it?).
     
-    OUTPUT JSON ARRAY:
+    OUTPUT JSON ARRAY (strict format):
     [
       {
         "project": "Project Name (pick best match from INPUT 2, or suggest 'My Tasks')",
@@ -144,9 +178,10 @@ export async function synthesizeWorkload(
   `;
 
   try {
-    return await runWithCascade(prompt, 2);
+    const result = await runWithCascade(prompt, 2);
+    return Array.isArray(result) ? result : [];
   } catch (e: any) {
-    alert(`Synthesis Failed: ${e.message}`);
+    console.error(`Synthesis Failed: ${e.message}`);
     return [];
   }
 }
@@ -155,16 +190,25 @@ export async function analyzeSignal(
   slackMessage: string, 
   availableProjects: string[]
 ): Promise<AiSuggestion[]> {
+  if (!slackMessage || typeof slackMessage !== 'string') {
+    console.warn("analyzeSignal called with invalid message");
+    return [];
+  }
+
   const prompt = `
     Analyze this message into Asana tasks.
-    Message: "${slackMessage}"
+    Message: "${slackMessage.slice(0, 500)}"
     Projects: ${JSON.stringify(availableProjects)}
-    Output JSON Array: [{ "title": "...", "projectName": "...", "reasoning": "..." }]
+    
+    Output JSON Array (strict format):
+    [{ "title": "...", "projectName": "...", "reasoning": "..." }]
   `;
 
   try {
-    return await runWithCascade(prompt, 1);
+    const result = await runWithCascade(prompt, 1);
+    return Array.isArray(result) ? result : [];
   } catch (e) {
+    console.error("analyzeSignal failed:", e);
     return [];
   }
 }

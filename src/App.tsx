@@ -14,6 +14,7 @@ function App() {
   const [slackTasks, setSlackTasks] = useState<UnifiedTask[]>([]);
   const [asanaTasks, setAsanaTasks] = useState<UnifiedTask[]>([]);
   const [loading, setLoading] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false); // FIX: Prevent sync race conditions
   const [analyzingId, setAnalyzingId] = useState<string | null>(null);
   
   const [slackContext, setSlackContext] = useState<SlackContext | null>(null);
@@ -27,30 +28,49 @@ function App() {
   const [synthesisResults, setSynthesisResults] = useState<ProposedTask[] | null>(null);
   const [showFilterModal, setShowFilterModal] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
-  const [showArchiveConfirm, setShowArchiveConfirm] = useState(false); // NEW: State for archive modal
+  const [showArchiveConfirm, setShowArchiveConfirm] = useState(false);
   const [processingTaskIdx, setProcessingTaskIdx] = useState<number | null>(null);
   
   const [filterSearch, setFilterSearch] = useState("");
 
   // --- USER PROFILE STATE ---
   const [userProfile, setUserProfile] = useState<UserProfile | null>(() => {
-    const stored = localStorage.getItem("meta_user_profile");
-    return stored ? JSON.parse(stored) : null;
+    try {
+      const stored = localStorage.getItem("meta_user_profile");
+      return stored ? JSON.parse(stored) : null;
+    } catch (e) {
+      console.error("Failed to load user profile from localStorage:", e);
+      return null;
+    }
   });
 
   const handleSaveProfile = (profile: UserProfile) => {
-    setUserProfile(profile);
-    localStorage.setItem("meta_user_profile", JSON.stringify(profile));
+    try {
+      setUserProfile(profile);
+      localStorage.setItem("meta_user_profile", JSON.stringify(profile));
+    } catch (e) {
+      console.error("Failed to save user profile:", e);
+      alert("Failed to save profile");
+    }
   };
   // --------------------------
 
   const [blockedFilters, setBlockedFilters] = useState<string[]>(() => {
-    const stored = localStorage.getItem("meta_blocked_filters");
-    return stored ? JSON.parse(stored) : [];
+    try {
+      const stored = localStorage.getItem("meta_blocked_filters");
+      return stored ? JSON.parse(stored) : [];
+    } catch (e) {
+      console.error("Failed to load blocked filters:", e);
+      return [];
+    }
   });
 
   useEffect(() => { 
-    localStorage.setItem("meta_blocked_filters", JSON.stringify(blockedFilters)); 
+    try {
+      localStorage.setItem("meta_blocked_filters", JSON.stringify(blockedFilters));
+    } catch (e) {
+      console.error("Failed to save blocked filters:", e);
+    }
   }, [blockedFilters]);
 
   // --- DERIVED STATE ---
@@ -72,8 +92,13 @@ function App() {
   // --------------------
 
   const getArchivedIds = (): string[] => {
-    const stored = localStorage.getItem("meta_archived_ids");
-    return stored ? JSON.parse(stored) : [];
+    try {
+      const stored = localStorage.getItem("meta_archived_ids");
+      return stored ? JSON.parse(stored) : [];
+    } catch (e) {
+      console.error("Failed to read archived IDs from localStorage:", e);
+      return [];
+    }
   };
 
   const calculateDateRange = () => {
@@ -96,25 +121,40 @@ function App() {
     return { start, end };
   };
 
+  // FIX: Prevent race conditions with isSyncing flag
   const sync = async (ctx: SlackContext) => {
-    setLoading(true);
-    const archivedIds = getArchivedIds();
-    const { start, end } = calculateDateRange(); 
-
-    console.log(`🔄 Syncing... Range: ${start.toLocaleDateString()} - ${end.toLocaleDateString()}`);
-
-    const [slackData, asanaData] = await Promise.allSettled([
-      fetchSlackSignals(ctx, start, end),
-      fetchAsanaTasks()
-    ]);
-    
-    if (slackData.status === 'fulfilled') {
-      const active = slackData.value.filter(t => !archivedIds.includes(t.id));
-      setSlackTasks(active);
+    if (isSyncing) {
+      console.warn("Sync already in progress");
+      return;
     }
-    if (asanaData.status === 'fulfilled') setAsanaTasks(asanaData.value);
 
-    setLoading(false);
+    setIsSyncing(true);
+    setLoading(true);
+    
+    try {
+      const archivedIds = getArchivedIds();
+      const { start, end } = calculateDateRange(); 
+
+      console.log(`🔄 Syncing... Range: ${start.toLocaleDateString()} - ${end.toLocaleDateString()}`);
+
+      const [slackData, asanaData] = await Promise.allSettled([
+        fetchSlackSignals(ctx, start, end),
+        fetchAsanaTasks()
+      ]);
+      
+      if (slackData.status === 'fulfilled' && Array.isArray(slackData.value)) {
+        const active = slackData.value.filter(t => !archivedIds.includes(t.id));
+        setSlackTasks(active);
+      }
+      if (asanaData.status === 'fulfilled' && Array.isArray(asanaData.value)) {
+        setAsanaTasks(asanaData.value);
+      }
+    } catch (e) {
+      console.error("Sync error:", e);
+    } finally {
+      setLoading(false);
+      setIsSyncing(false);
+    }
   };
 
   useEffect(() => {
@@ -140,33 +180,49 @@ function App() {
 
   const clearArchive = () => {
     if (confirm("Are you sure you want to un-archive all messages?")) {
+      try {
         localStorage.removeItem("meta_archived_ids");
         if (slackContext) sync(slackContext); 
+      } catch (e) {
+        console.error("Failed to clear archive:", e);
+        alert("Failed to clear archive");
+      }
     }
   };
   
   const clearFilters = () => { setBlockedFilters([]); };
 
+  // FIX: Add try-catch for localStorage operations
   const handleArchive = (id: string) => {
-    const current = getArchivedIds();
-    localStorage.setItem("meta_archived_ids", JSON.stringify([...current, id]));
-    setSlackTasks(prev => prev.filter(t => t.id !== id));
+    try {
+      const current = getArchivedIds();
+      localStorage.setItem("meta_archived_ids", JSON.stringify([...current, id]));
+      setSlackTasks(prev => prev.filter(t => t.id !== id));
+    } catch (e) {
+      console.error("Failed to archive task:", e);
+      alert("Failed to archive task");
+    }
   };
 
-  // 1. Opens the Confirmation Modal
   const requestArchiveAll = () => {
     if (visibleSlackTasks.length === 0) return;
     setShowArchiveConfirm(true);
   };
 
-  // 2. Executes the logic when "Confirm" is clicked in the Modal
+  // FIX: Add try-catch for localStorage operations
   const executeArchiveAll = () => {
-    const current = getArchivedIds();
-    const newIds = visibleSlackTasks.map(t => t.id);
-    localStorage.setItem("meta_archived_ids", JSON.stringify([...current, ...newIds]));
-    
-    setSlackTasks(prev => prev.filter(t => !newIds.includes(t.id)));
-    setShowArchiveConfirm(false);
+    try {
+      const current = getArchivedIds();
+      const newIds = visibleSlackTasks.map(t => t.id);
+      localStorage.setItem("meta_archived_ids", JSON.stringify([...current, ...newIds]));
+      
+      setSlackTasks(prev => prev.filter(t => !newIds.includes(t.id)));
+      setShowArchiveConfirm(false);
+    } catch (e) {
+      console.error("Failed to archive all:", e);
+      alert("Failed to archive tasks");
+      setShowArchiveConfirm(false);
+    }
   };
 
   const handleCompleteTask = async (taskId: string) => {
@@ -175,28 +231,60 @@ function App() {
     if (!success && slackContext) sync(slackContext); 
   };
 
+  // FIX: Add null check for task and error handling
   const handleAiPromote = async (task: UnifiedTask) => {
+    if (!task || !task.id) {
+      console.error("Invalid task for promotion");
+      return;
+    }
+
     setAnalyzingId(task.id); 
-    const projects = await getProjectList();
-    const suggestions = await analyzeSignal(task.title, projects);
-    setAnalyzingId(null);
-    if (suggestions.length === 0) { alert("No tasks found."); return; }
-    setReviewState({ sourceTask: task, suggestions, selectedIndices: new Set(suggestions.map((_, i) => i)) });
+    try {
+      const projects = await getProjectList();
+      const suggestions = await analyzeSignal(task.title, projects);
+      if (suggestions.length === 0) { 
+        alert("No tasks found."); 
+        setAnalyzingId(null);
+        return; 
+      }
+      setReviewState({ sourceTask: task, suggestions, selectedIndices: new Set(suggestions.map((_, i) => i)) });
+    } catch (e) {
+      console.error("AI promotion failed:", e);
+      alert("Failed to analyze signal");
+    } finally {
+      setAnalyzingId(null);
+    }
   };
 
+  // FIX: Add null check for reviewState and error handling
   const handleApproveSuggestions = async () => {
-    if (!reviewState) return;
+    if (!reviewState) {
+      console.error("No review state");
+      return;
+    }
+
     setReviewState(null); 
     setLoading(true);
-    for (const [i, item] of reviewState.suggestions.entries()) {
-      if (reviewState.selectedIndices.has(i)) {
-        await createAsanaTaskWithProject(item.title, item.projectName, `Context: ${reviewState.sourceTask.url}\n\nReasoning: ${item.reasoning}`);
+    
+    try {
+      for (const [i, item] of reviewState.suggestions.entries()) {
+        if (reviewState.selectedIndices.has(i)) {
+          await createAsanaTaskWithProject(
+            item.title, 
+            item.projectName, 
+            `Context: ${reviewState.sourceTask.url}\n\nReasoning: ${item.reasoning}`
+          );
+        }
       }
+      handleArchive(reviewState.sourceTask.id);
+      const newAsana = await fetchAsanaTasks();
+      setAsanaTasks(newAsana);
+    } catch (e) {
+      console.error("Failed to approve suggestions:", e);
+      alert("Failed to create some tasks");
+    } finally {
+      setLoading(false);
     }
-    handleArchive(reviewState.sourceTask.id);
-    const newAsana = await fetchAsanaTasks();
-    setAsanaTasks(newAsana);
-    setLoading(false);
   };
 
   const handleSynthesize = async () => {
@@ -331,7 +419,7 @@ function App() {
             
             <button onClick={() => setShowFilterModal(true)} className={`flex items-center gap-2 border px-3 py-2 rounded-lg transition font-medium text-sm ${blockedFilters.length ? 'bg-purple-50 border-purple-200 text-purple-700' : 'bg-white text-gray-700'}`}><Filter size={16} /> Filters</button>
             
-            <button onClick={() => slackContext && sync(slackContext)} disabled={!slackContext} className="flex items-center gap-2 bg-white border px-4 py-2 rounded-lg hover:bg-gray-50 text-gray-700 transition font-medium text-sm disabled:opacity-50"><RefreshCw size={16} className={loading ? "animate-spin" : ""} /> Sync</button>
+            <button onClick={() => slackContext && sync(slackContext)} disabled={!slackContext || isSyncing} className="flex items-center gap-2 bg-white border px-4 py-2 rounded-lg hover:bg-gray-50 text-gray-700 transition font-medium text-sm disabled:opacity-50"><RefreshCw size={16} className={loading ? "animate-spin" : ""} /> Sync</button>
         </div>
       </div>
 
@@ -358,7 +446,6 @@ function App() {
         />
       )}
 
-      {/* NEW: Custom Archive Confirmation Modal */}
       {showArchiveConfirm && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl shadow-xl max-w-sm w-full p-6">
