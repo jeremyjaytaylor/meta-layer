@@ -211,7 +211,7 @@ export async function createAsanaSubtask(parentId: string, title: string): Promi
           'Authorization': `Bearer ${ASANA_TOKEN}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ data: { name: title } })
+        body: JSON.stringify({ data: { name: title, assignee: 'me' } })
       });
 
     if (!response.ok) {
