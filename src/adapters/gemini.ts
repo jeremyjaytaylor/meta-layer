@@ -132,6 +132,9 @@ export async function synthesizeWorkload(
   const cleanSignals = minifySignals(activeSignals);
   const projectList = availableProjects && Array.isArray(availableProjects) ? JSON.stringify(availableProjects) : "[]";
 
+  // Create signal index for AI to reference back to sources
+  const signalIndex = cleanSignals.map((s, idx) => `[Signal ${idx}] Channel: #${s.channel} | User: ${s.user} | URL: ${s.url || 'N/A'}`).join('\n');
+
   let personaContext = "You are a Chief of Staff.";
   let prioritizationInstructions = "Cluster related threads into Major Tasks.";
 
@@ -157,6 +160,9 @@ export async function synthesizeWorkload(
     
     Your goal is to synthesize these Slack signals into a Project Plan that is actionable for this specific user.
     
+    SIGNAL REFERENCE INDEX (use these signal numbers in sourceSignalIndices):
+    ${signalIndex}
+    
     INPUTS:
     1. SIGNALS: ${JSON.stringify(cleanSignals)}
     2. AVAILABLE ASANA PROJECTS: ${projectList}
@@ -165,7 +171,8 @@ export async function synthesizeWorkload(
     ${prioritizationInstructions}
     4. Ignore resolved/done items.
     5. Create subtasks for specific actions.
-    6. CITE SOURCES with links to the original messages and documents.
+    6. CITE SOURCES by referencing signal indices and including message URLs.
+    7. For each task, list which signals (by index number) contributed to it in "sourceSignalIndices".
     
     OUTPUT JSON ARRAY (strict format):
     [
@@ -174,15 +181,44 @@ export async function synthesizeWorkload(
         "title": "Major Task Name",
         "description": "Context and why this is relevant to the user. Include specific information from the source materials that led to identifying this task.",
         "subtasks": ["Action 1", "Action 2"],
-        "citations": ["Source description: who said what and why it matters"],
-        "sourceLinks": [{"text": "Slack message in #channel", "url": "https://..."}]
+        "citations": ["Who said what and why it matters"],
+        "sourceSignalIndices": [0, 2, 5],
+        "sourceLinks": [{"text": "Slack message in #channel from User", "url": "https://..."}]
       }
     ]
   `;
 
   try {
     const result = await runWithCascade(prompt, 2);
-    return Array.isArray(result) ? result : [];
+    
+    // Post-process results to ensure sourceLinks are populated from original signals
+    if (Array.isArray(result)) {
+      return result.map((task: any) => {
+        // If AI provided signal indices, use them to populate sourceLinks
+        if (Array.isArray(task.sourceSignalIndices)) {
+          const sourceLinks: { text: string; url: string; }[] = [];
+          task.sourceSignalIndices.forEach((idx: number) => {
+            if (cleanSignals[idx]) {
+              const signal = cleanSignals[idx];
+              sourceLinks.push({
+                text: `Slack message in #${signal.channel} from ${signal.user}`,
+                url: signal.url || '#'
+              });
+            }
+          });
+          task.sourceLinks = sourceLinks.length > 0 ? sourceLinks : (task.sourceLinks || []);
+        }
+        
+        // Ensure sourceLinks always exists (even if empty)
+        if (!Array.isArray(task.sourceLinks)) {
+          task.sourceLinks = [];
+        }
+        
+        return task;
+      });
+    }
+    
+    return [];
   } catch (e: any) {
     console.error(`Synthesis Failed: ${e.message}`);
     return [];
