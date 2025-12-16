@@ -57,9 +57,11 @@ export function TaskCard({ task, onComplete, onPromote, onArchive }: TaskCardPro
         </div>
 
         <div className="flex items-start gap-2">
-            <h3 className="font-medium text-gray-800 leading-snug text-sm break-words whitespace-normal group-hover:text-blue-700 transition-colors">
-                {task.title}
+          <div className="flex-1 min-w-0">
+            <h3 className="font-medium text-gray-800 leading-snug text-sm break-all whitespace-normal group-hover:text-blue-700 transition-colors overflow-hidden">
+              {task.title}
             </h3>
+          </div>
             {(task.provider === 'gdrive' || task.provider === 'notion') && (
                 <ExternalLink size={12} className="text-blue-500 mt-1 flex-shrink-0" />
             )}

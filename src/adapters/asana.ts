@@ -198,7 +198,7 @@ export async function createAsanaTaskWithProject(title: string, projectName: str
   }
 }
 
-export async function createAsanaSubtask(parentId: string, title: string): Promise<boolean> {
+export async function createAsanaSubtask(parentId: string, title: string, notes?: string): Promise<boolean> {
   try {
     if (!parentId || !title) {
       console.error("createAsanaSubtask: Missing parentId or title");
@@ -211,7 +211,7 @@ export async function createAsanaSubtask(parentId: string, title: string): Promi
           'Authorization': `Bearer ${ASANA_TOKEN}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ data: { name: title, assignee: 'me' } })
+        body: JSON.stringify({ data: { name: title, assignee: 'me', notes: notes || '' } })
       });
 
     if (!response.ok) {

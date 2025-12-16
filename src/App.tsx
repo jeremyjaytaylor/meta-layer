@@ -327,9 +327,9 @@ function App() {
         fullDescription += `\n\nSource Documents:\n${task.sourceLinks.map(link => `• [${link.text}](${link.url})`).join('\n')}`;
       }
       
-      const parentId = await createAsanaTaskWithProject(task.title, task.project, fullDescription);
-      if (parentId) {
-          for (const sub of task.subtasks) await createAsanaSubtask(parentId, sub);
+        const parentId = await createAsanaTaskWithProject(task.title, task.project, fullDescription);
+        if (parentId) {
+          for (const sub of task.subtasks) await createAsanaSubtask(parentId, sub, fullDescription);
           setSynthesisResults(prev => prev ? prev.filter((_, i) => i !== index) : null);
           const newAsana = await fetchAsanaTasks();
           setAsanaTasks(newAsana);
