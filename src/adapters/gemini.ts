@@ -12,7 +12,7 @@ if (!API_KEY) {
 const genAI = new GoogleGenerativeAI(API_KEY);
 
 export interface ParsedMessage { msgId: string; suggestedProject: string; }
-export interface ProposedTask { title: string; description: string; project: string; subtasks: string[]; citations: string[]; }
+export interface ProposedTask { title: string; description: string; project: string; subtasks: string[]; citations: string[]; sourceLinks: { text: string; url: string; }[]; }
 export interface AiSuggestion { title: string; projectName: string; reasoning: string; }
 
 // STRATEGY: Stable Cascade - Only use valid, existing models
@@ -42,6 +42,8 @@ function minifySignals(signals: any[]): any[] {
       channel: s.channelName, 
       text: content,
       user: s.mainMessage?.username || s.mainMessage?.user,
+      url: s.url,
+      source: s.source,
       replies: Array.isArray(s.thread) ? s.thread.map((t: any) => ({ user: t.user, text: t.text })) : []
     };
   });
@@ -163,16 +165,17 @@ export async function synthesizeWorkload(
     ${prioritizationInstructions}
     4. Ignore resolved/done items.
     5. Create subtasks for specific actions.
-    6. CITE SOURCES (Who said it?).
+    6. CITE SOURCES with links to the original messages and documents.
     
     OUTPUT JSON ARRAY (strict format):
     [
       {
         "project": "Project Name (pick best match from INPUT 2, or suggest 'My Tasks')",
         "title": "Major Task Name",
-        "description": "Context and why this is relevant to the user...",
+        "description": "Context and why this is relevant to the user. Include specific information from the source materials that led to identifying this task.",
         "subtasks": ["Action 1", "Action 2"],
-        "citations": ["User said..."]
+        "citations": ["Source description: who said what and why it matters"],
+        "sourceLinks": [{"text": "Slack message in #channel", "url": "https://..."}]
       }
     ]
   `;

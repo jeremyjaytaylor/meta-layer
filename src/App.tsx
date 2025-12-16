@@ -301,6 +301,7 @@ function App() {
         }, 
         thread: [], 
         source: 'slack',
+        url: task.url,
         channelName: task.metadata.sourceLabel 
     }));
 
@@ -313,7 +314,20 @@ function App() {
   const handleApproveSynthesizedTask = async (task: ProposedTask, index: number) => {
     setProcessingTaskIdx(index);
     try {
-      const parentId = await createAsanaTaskWithProject(task.title, task.project, `${task.description}\n\nSources:\n${task.citations.join('\n')}`);
+      // Build description with citations and source links
+      let fullDescription = task.description;
+      
+      // Add citations section
+      if (task.citations && task.citations.length > 0) {
+        fullDescription += `\n\nCitations:\n${task.citations.map(c => `• ${c}`).join('\n')}`;
+      }
+      
+      // Add source links section
+      if (task.sourceLinks && task.sourceLinks.length > 0) {
+        fullDescription += `\n\nSource Documents:\n${task.sourceLinks.map(link => `• [${link.text}](${link.url})`).join('\n')}`;
+      }
+      
+      const parentId = await createAsanaTaskWithProject(task.title, task.project, fullDescription);
       if (parentId) {
           for (const sub of task.subtasks) await createAsanaSubtask(parentId, sub);
           setSynthesisResults(prev => prev ? prev.filter((_, i) => i !== index) : null);
