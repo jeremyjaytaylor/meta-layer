@@ -390,7 +390,7 @@ function App() {
 
   return (
     <div className="min-h-screen p-8 text-gray-900 font-sans bg-gray-50 relative">
-      {loading && slackTasks.length === 0 && (
+      {slackTasks.length === 0 && (
         <div className="fixed inset-0 bg-black/10 backdrop-blur-sm flex items-center justify-center z-40">
           <div className="bg-white rounded-2xl shadow-2xl p-8 flex flex-col items-center gap-4">
             <div className="relative w-12 h-12">
