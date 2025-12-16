@@ -20,7 +20,7 @@ function App() {
   const [slackContext, setSlackContext] = useState<SlackContext | null>(null);
   const [initError, setInitError] = useState<string | null>(null);
 
-  const [timeRange, setTimeRange] = useState<TimeRange>('week');
+  const [timeRange, setTimeRange] = useState<TimeRange>('3days');
   const [customStart, setCustomStart] = useState<string>('');
   const [customEnd, setCustomEnd] = useState<string>('');
 
@@ -390,6 +390,22 @@ function App() {
 
   return (
     <div className="min-h-screen p-8 text-gray-900 font-sans bg-gray-50 relative">
+      {loading && slackTasks.length === 0 && (
+        <div className="fixed inset-0 bg-black/10 backdrop-blur-sm flex items-center justify-center z-40">
+          <div className="bg-white rounded-2xl shadow-2xl p-8 flex flex-col items-center gap-4">
+            <div className="relative w-12 h-12">
+              <div className="absolute inset-0 bg-gradient-to-r from-purple-500 to-purple-600 rounded-full animate-spin" style={{clipPath: "polygon(50% 0%, 50% 50%, 100% 50%, 100% 100%, 0% 100%, 0% 50%)"}}></div>
+              <div className="absolute inset-1 bg-white rounded-full flex items-center justify-center">
+                <Sparkles size={20} className="text-purple-600" />
+              </div>
+            </div>
+            <div className="text-center">
+              <p className="font-bold text-gray-900">Loading signals...</p>
+              <p className="text-sm text-gray-500 mt-1">Connecting to Slack and Asana</p>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
         <div className="flex items-center gap-3">
             <div className="p-2 bg-black rounded-lg"><LayoutTemplate className="text-white" size={24} /></div>
