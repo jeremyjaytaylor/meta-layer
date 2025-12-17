@@ -312,10 +312,10 @@ function App() {
     const plan = await synthesizeWorkload(richSignals, [], projects, userProfile);
     setSynthesisResults(plan);
     
-    // Initialize selected projects with AI suggestions
+    // Initialize selected projects to "None" by default
     const initialSelections: Record<number, string> = {};
-    plan.forEach((task, idx) => {
-      initialSelections[idx] = task.project || 'None';
+    plan.forEach((_task, idx) => {
+      initialSelections[idx] = 'None';
     });
     setSelectedProjects(initialSelections);
     
@@ -588,33 +588,33 @@ function App() {
                 <div className="flex-1 overflow-y-auto p-6 space-y-6">
                     {synthesisResults.map((task, i) => (
                         <div key={`synthesis-${i}`} className="border rounded-xl p-6 hover:shadow-lg transition">
-                            <div className="flex justify-between items-start">
-                                <div className="flex-1">
+                            <div className="flex flex-col gap-4">
+                                <div>
                                     <div className="flex items-center gap-2 mb-2">
                                         <h3 className="text-lg font-bold">{task.title}</h3>
                                     </div>
                                     <p className="text-gray-600 mb-4">{task.description}</p>
                                     <ul className="list-disc pl-5 space-y-1 mb-4 text-sm text-gray-700">{task.subtasks.map((s, sIdx) => <li key={`subtask-${i}-${sIdx}`}>{s}</li>)}</ul>
                                     <div className="text-xs text-gray-400 mb-3">Sources: {task.citations.join(", ")}</div>
-                                    <div className="flex items-center gap-2">
-                                      <label className="text-xs font-bold text-gray-500 uppercase">Project:</label>
-                                      <select 
-                                        value={selectedProjects[i] || 'None'} 
-                                        onChange={(e) => setSelectedProjects(prev => ({...prev, [i]: e.target.value}))}
-                                        className="text-sm border border-gray-300 rounded px-2 py-1 bg-white focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-                                      >
-                                        <option value="None">None (My Tasks)</option>
-                                        {availableProjects.map(p => (
-                                          <option key={p} value={p}>{p}</option>
-                                        ))}
-                                      </select>
-                                    </div>
                                 </div>
-                                <div className="flex flex-col gap-2 ml-4">
-                                    <button onClick={() => handleApproveSynthesizedTask(task, i)} disabled={processingTaskIdx === i} className="bg-black text-white px-4 py-2 rounded-lg font-bold text-sm flex items-center gap-2 hover:bg-gray-800 disabled:opacity-50">
+                                <div className="flex items-center gap-3 flex-wrap">
+                                  <label className="text-xs font-bold text-gray-500 uppercase whitespace-nowrap">Project:</label>
+                                  <select 
+                                    value={selectedProjects[i] || 'None'} 
+                                    onChange={(e) => setSelectedProjects(prev => ({...prev, [i]: e.target.value}))}
+                                    className="text-sm border border-gray-300 rounded px-2 py-1 bg-white focus:ring-2 focus:ring-purple-500 focus:border-transparent flex-1 min-w-[150px]"
+                                  >
+                                    <option value="None">None (My Tasks)</option>
+                                    {availableProjects.map(p => (
+                                      <option key={p} value={p}>{p}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                                <div className="flex flex-col gap-2 pt-2 border-t">
+                                    <button onClick={() => handleApproveSynthesizedTask(task, i)} disabled={processingTaskIdx === i} className="bg-black text-white px-4 py-2 rounded-lg font-bold text-sm flex items-center gap-2 hover:bg-gray-800 disabled:opacity-50 w-full justify-center">
                                         {processingTaskIdx === i ? <RefreshCw size={14} className="animate-spin" /> : <Check size={14} />} Accept
                                     </button>
-                                    <button onClick={() => handleDismissSynthesizedTask(i)} className="text-gray-400 hover:text-red-500 text-sm">Dismiss</button>
+                                    <button onClick={() => handleDismissSynthesizedTask(i)} className="text-gray-400 hover:text-red-500 text-sm text-center">Dismiss</button>
                                 </div>
                             </div>
                         </div>
