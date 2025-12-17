@@ -159,19 +159,24 @@ export async function createAsanaTaskWithProject(title: string, projectName: str
       return null;
     }
 
-    const projectsResponse = await fetch(
-      `https://app.asana.com/api/1.0/projects?workspace=${workspaceId}&archived=false&opt_fields=name,gid`, 
-      { headers: { 'Authorization': `Bearer ${ASANA_TOKEN}` } }
-    );
+    let projectId: string | null = null;
+    
+    // Only look up project if projectName is provided
+    if (projectName && projectName.trim() !== '') {
+      const projectsResponse = await fetch(
+        `https://app.asana.com/api/1.0/projects?workspace=${workspaceId}&archived=false&opt_fields=name,gid`, 
+        { headers: { 'Authorization': `Bearer ${ASANA_TOKEN}` } }
+      );
 
-    if (!projectsResponse.ok) {
-      console.error(`Failed to fetch projects: ${projectsResponse.status}`);
-      return null;
+      if (!projectsResponse.ok) {
+        console.error(`Failed to fetch projects: ${projectsResponse.status}`);
+        return null;
+      }
+
+      const projectsData = await projectsResponse.json() as any;
+      const project = projectsData.data?.find((p: any) => p.name === projectName);
+      projectId = project ? project.gid : null;
     }
-
-    const projectsData = await projectsResponse.json() as any;
-    const project = projectsData.data?.find((p: any) => p.name === projectName);
-    const projectId = project ? project.gid : null;
 
     const body: any = { workspace: workspaceId, name: title, notes: notes || '', assignee: 'me' };
     if (projectId) body.projects = [projectId];

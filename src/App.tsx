@@ -26,6 +26,8 @@ function App() {
 
   const [reviewState, setReviewState] = useState<{ sourceTask: UnifiedTask, suggestions: AiSuggestion[], selectedIndices: Set<number> } | null>(null);
   const [synthesisResults, setSynthesisResults] = useState<ProposedTask[] | null>(null);
+  const [availableProjects, setAvailableProjects] = useState<string[]>([]);
+  const [selectedProjects, setSelectedProjects] = useState<Record<number, string>>({});
   const [showFilterModal, setShowFilterModal] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showArchiveConfirm, setShowArchiveConfirm] = useState(false);
@@ -306,8 +308,17 @@ function App() {
     }));
 
     const projects = await getProjectList();
+    setAvailableProjects(projects);
     const plan = await synthesizeWorkload(richSignals, [], projects, userProfile);
     setSynthesisResults(plan);
+    
+    // Initialize selected projects with AI suggestions
+    const initialSelections: Record<number, string> = {};
+    plan.forEach((task, idx) => {
+      initialSelections[idx] = task.project || 'None';
+    });
+    setSelectedProjects(initialSelections);
+    
     setLoading(false);
   };
 
@@ -327,7 +338,9 @@ function App() {
         fullDescription += `\n\nSource Documents:\n${task.sourceLinks.map(link => `• [${link.text}](${link.url})`).join('\n')}`;
       }
       
-        const parentId = await createAsanaTaskWithProject(task.title, task.project, fullDescription);
+      // Use user-selected project instead of AI suggestion
+      const selectedProject = selectedProjects[index] === 'None' ? '' : selectedProjects[index];
+      const parentId = await createAsanaTaskWithProject(task.title, selectedProject, fullDescription);
         if (parentId) {
           for (const sub of task.subtasks) await createAsanaSubtask(parentId, sub, fullDescription);
           setSynthesisResults(prev => prev ? prev.filter((_, i) => i !== index) : null);
@@ -576,16 +589,28 @@ function App() {
                     {synthesisResults.map((task, i) => (
                         <div key={`synthesis-${i}`} className="border rounded-xl p-6 hover:shadow-lg transition">
                             <div className="flex justify-between items-start">
-                                <div>
+                                <div className="flex-1">
                                     <div className="flex items-center gap-2 mb-2">
-                                        <span className="bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded font-bold uppercase">{task.project}</span>
                                         <h3 className="text-lg font-bold">{task.title}</h3>
                                     </div>
                                     <p className="text-gray-600 mb-4">{task.description}</p>
                                     <ul className="list-disc pl-5 space-y-1 mb-4 text-sm text-gray-700">{task.subtasks.map((s, sIdx) => <li key={`subtask-${i}-${sIdx}`}>{s}</li>)}</ul>
-                                    <div className="text-xs text-gray-400">Sources: {task.citations.join(", ")}</div>
+                                    <div className="text-xs text-gray-400 mb-3">Sources: {task.citations.join(", ")}</div>
+                                    <div className="flex items-center gap-2">
+                                      <label className="text-xs font-bold text-gray-500 uppercase">Project:</label>
+                                      <select 
+                                        value={selectedProjects[i] || 'None'} 
+                                        onChange={(e) => setSelectedProjects(prev => ({...prev, [i]: e.target.value}))}
+                                        className="text-sm border border-gray-300 rounded px-2 py-1 bg-white focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                                      >
+                                        <option value="None">None (My Tasks)</option>
+                                        {availableProjects.map(p => (
+                                          <option key={p} value={p}>{p}</option>
+                                        ))}
+                                      </select>
+                                    </div>
                                 </div>
-                                <div className="flex flex-col gap-2">
+                                <div className="flex flex-col gap-2 ml-4">
                                     <button onClick={() => handleApproveSynthesizedTask(task, i)} disabled={processingTaskIdx === i} className="bg-black text-white px-4 py-2 rounded-lg font-bold text-sm flex items-center gap-2 hover:bg-gray-800 disabled:opacity-50">
                                         {processingTaskIdx === i ? <RefreshCw size={14} className="animate-spin" /> : <Check size={14} />} Accept
                                     </button>
