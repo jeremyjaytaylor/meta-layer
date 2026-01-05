@@ -16,6 +16,9 @@
           "url": "https://slack.com/**"
         },
         {
+          "url": "https://files.slack.com/**"
+        },
+        {
           "url": "https://app.asana.com/**",
           "method": "*"
         }
