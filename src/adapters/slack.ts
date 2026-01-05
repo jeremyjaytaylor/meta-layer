@@ -1,5 +1,6 @@
 import { fetch } from '@tauri-apps/plugin-http';
 import { UnifiedTask, SlackContext, SlackUser, SlackChannel } from '../types/unified';
+import { downloadAndParseFile } from './fileParser';
 
 const SLACK_TOKEN = import.meta.env.VITE_SLACK_TOKEN;
 const MAX_PAGES = 10;
@@ -251,10 +252,10 @@ function resolveSourceLabel(match: any, context: SlackContext): string {
   return channelId || "Unknown Channel";
 }
 
-function parseMessage(match: any, context: SlackContext): UnifiedTask {
+async function parseMessage(match: any, context: SlackContext): Promise<UnifiedTask | null> {
   if (!match.ts) {
     console.warn("Message missing timestamp");
-    return null as any;
+    return null;
   }
 
   const msgId = match.ts.replace('.', '');
@@ -280,11 +281,37 @@ function parseMessage(match: any, context: SlackContext): UnifiedTask {
 
   if (url.includes("docs.google.com") || url.includes("drive.google.com")) provider = 'gdrive';
   
+  // Extract file information if present and download full content
+  let fileData: any = null;
   if (match.files && Array.isArray(match.files) && match.files.length > 0) {
       const f = match.files[0];
       const fileTitle = f.title || f.name;
       title = `📧 ${fileTitle}`; 
       url = f.permalink || url;
+      
+      // Download and parse file content
+      let fullContent = f.preview || f.plain_text || "";
+      if (f.url_private_download) {
+        console.log(`📥 Downloading file: ${fileTitle}...`);
+        const parsedContent = await downloadAndParseFile(
+          f.url_private_download,
+          f.mimetype || '',
+          SLACK_TOKEN
+        );
+        if (parsedContent) {
+          fullContent = parsedContent;
+          console.log(`✅ Extracted ${parsedContent.length} characters from ${fileTitle}`);
+        }
+      }
+      
+      // Store file data for AI ingestion
+      fileData = {
+        title: fileTitle,
+        name: f.name,
+        preview: fullContent,
+        mimetype: f.mimetype,
+        size: f.size
+      };
   }
 
   if (match.username === "google drive" || match.bot_profile?.name === "Google Drive") {
@@ -311,7 +338,8 @@ function parseMessage(match: any, context: SlackContext): UnifiedTask {
     metadata: {
       author: author,
       sourceLabel: sourceLabel,
-      sourceType: sourceType
+      sourceType: sourceType,
+      fileData: fileData
     }
   };
 }
@@ -438,9 +466,12 @@ export async function fetchSlackSignals(
         return true;
     });
 
-    return filteredMatches
-      .map(m => parseMessage(m, context))
-      .filter((task): task is UnifiedTask => task !== null);
+    // Parse messages in parallel and wait for all to complete
+    const parsedMessages = await Promise.all(
+      filteredMatches.map(m => parseMessage(m, context))
+    );
+    
+    return parsedMessages.filter((task): task is UnifiedTask => task !== null);
 
   } catch (error) {
     console.error("Slack Adapter Error:", error);
@@ -459,7 +490,8 @@ export async function fetchRichSignals(
         id: task.id, 
         mainMessage: { 
             text: task.title, 
-            user: task.metadata.author 
+            user: task.metadata.author,
+            files: task.metadata.fileData ? [task.metadata.fileData] : []
         }, 
         thread: [], 
         source: 'slack',

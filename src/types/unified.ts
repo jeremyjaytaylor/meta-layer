@@ -13,6 +13,13 @@ export interface UnifiedTask {
     sourceLabel: string;   // The human-readable location (e.g. "#general", "DM: Alice")
     sourceType: 'channel' | 'dm' | 'mpdm' | 'project';
     due?: string;
+    fileData?: {
+      title: string;
+      name: string;
+      preview: string;
+      mimetype: string;
+      size: number;
+    };
   };
 }
 

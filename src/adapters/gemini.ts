@@ -30,11 +30,19 @@ function minifySignals(signals: any[]): any[] {
   return signals.map(s => {
     let content = s.mainMessage?.text || "";
     
-    // Append File Preview (Email Body)
+    // Append File Preview (Email Body, PDF, Docs, etc.)
     if (s.mainMessage?.files && Array.isArray(s.mainMessage.files) && s.mainMessage.files.length > 0) {
         const f = s.mainMessage.files[0];
-        if (f.title) content += `\n[File/Email Subject: ${f.title}]`;
-        if (f.preview) content += `\n[File/Email Content: ${f.preview}]`;
+        if (f.title || f.name) {
+          content += `\n\n--- ATTACHED FILE ---`;
+          content += `\nFile Name: ${f.title || f.name}`;
+          if (f.mimetype) content += `\nFile Type: ${f.mimetype}`;
+        }
+        // Include file preview/content if available
+        if (f.preview) {
+          content += `\n\nFILE CONTENTS:\n${f.preview}`;
+        }
+        content += `\n--- END FILE ---`;
     }
 
     return {
