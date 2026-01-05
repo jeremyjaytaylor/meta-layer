@@ -286,7 +286,6 @@ async function parseMessage(match: any, context: SlackContext): Promise<UnifiedT
   if (match.files && Array.isArray(match.files) && match.files.length > 0) {
       const f = match.files[0];
       const fileTitle = f.title || f.name;
-      title = `📧 ${fileTitle}`; 
       url = f.permalink || url;
       
       // Download and parse file content
@@ -297,19 +296,29 @@ async function parseMessage(match: any, context: SlackContext): Promise<UnifiedT
       
       if (downloadUrl) {
         console.log(`📥 Downloading file: ${fileTitle} (${f.mimetype})...`);
+        console.log(`   Download URL: ${downloadUrl.substring(0, 50)}...`);
         const parsedContent = await downloadAndParseFile(
           downloadUrl,
           f.mimetype || '',
           SLACK_TOKEN
         );
-        if (parsedContent) {
+        if (parsedContent && parsedContent.length > 0) {
           fullContent = parsedContent;
           console.log(`✅ Extracted ${parsedContent.length} characters from ${fileTitle}`);
+          console.log(`   First 200 chars: ${parsedContent.substring(0, 200)}...`);
         } else {
           console.warn(`⚠️ Failed to extract content from ${fileTitle}`);
         }
       } else {
-        console.log(`ℹ️ No download URL for ${fileTitle}, using preview only`);
+        console.log(`ℹ️ No download URL for ${fileTitle}, using preview only (${fullContent.length} chars)`);
+      }
+      
+      // Create title with content preview
+      const contentPreview = fullContent.substring(0, 150).trim();
+      if (contentPreview) {
+        title = `📧 ${fileTitle}: ${contentPreview}${fullContent.length > 150 ? '...' : ''}`;
+      } else {
+        title = `📧 ${fileTitle}`;
       }
       
       // Store file data for AI ingestion
@@ -318,8 +327,11 @@ async function parseMessage(match: any, context: SlackContext): Promise<UnifiedT
         name: f.name,
         preview: fullContent,
         mimetype: f.mimetype,
-        size: f.size
+        size: f.size,
+        fullContentLength: fullContent.length
       };
+      
+      console.log(`📋 Stored file data: ${fileTitle}, content length: ${fullContent.length}`);
   }
 
   if (match.username === "google drive" || match.bot_profile?.name === "Google Drive") {

@@ -27,13 +27,17 @@ const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 // FIX: Extract Email/File Content for AI
 function minifySignals(signals: any[]): any[] {
-  return signals.map(s => {
+  console.log(`🔄 minifySignals processing ${signals.length} signals...`);
+  
+  return signals.map((s, idx) => {
     let content = s.mainMessage?.text || "";
     
     // Append File Preview (Email Body, PDF, Docs, etc.)
     if (s.mainMessage?.files && Array.isArray(s.mainMessage.files) && s.mainMessage.files.length > 0) {
         const f = s.mainMessage.files[0];
-        console.log(`📄 Processing file in minifySignals: ${f.title || f.name}, preview length: ${f.preview?.length || 0}`);
+        console.log(`📄 Signal ${idx}: Processing file: ${f.title || f.name}`);
+        console.log(`   Preview available: ${!!f.preview}, length: ${f.preview?.length || 0}`);
+        console.log(`   Full content length from metadata: ${f.fullContentLength || 'unknown'}`);
         
         if (f.title || f.name) {
           content += `\n\n--- ATTACHED FILE ---`;
@@ -41,14 +45,17 @@ function minifySignals(signals: any[]): any[] {
           if (f.mimetype) content += `\nFile Type: ${f.mimetype}`;
         }
         // Include file preview/content if available
-        if (f.preview) {
+        if (f.preview && f.preview.length > 0) {
           content += `\n\nFILE CONTENTS:\n${f.preview}`;
-          console.log(`✅ Added ${f.preview.length} characters of file content to signal`);
+          console.log(`✅ Signal ${idx}: Added ${f.preview.length} characters of file content`);
+          console.log(`   Content preview: ${f.preview.substring(0, 100)}...`);
         } else {
-          console.warn(`⚠️ No preview content available for ${f.title || f.name}`);
+          console.warn(`⚠️ Signal ${idx}: No preview content available for ${f.title || f.name}`);
         }
         content += `\n--- END FILE ---`;
     }
+    
+    console.log(`📊 Signal ${idx} final content length: ${content.length}`);
 
     return {
       id: s.id,
