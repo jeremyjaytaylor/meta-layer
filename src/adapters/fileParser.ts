@@ -6,7 +6,14 @@ import { Buffer } from 'buffer';
 let pdfParse: any = null;
 async function getPdfParse() {
   if (!pdfParse) {
-    pdfParse = (await import('pdf-parse')).default;
+    try {
+      const module = await import('pdf-parse');
+      // Handle both default and named exports
+      pdfParse = module.default || module;
+      console.log('PDF parser loaded, type:', typeof pdfParse);
+    } catch (error) {
+      console.error('Failed to load pdf-parse:', error);
+    }
   }
   return pdfParse;
 }
@@ -56,7 +63,7 @@ export async function downloadAndParseFile(
     if (mimetype.includes('pdf')) {
       return await parsePDF(buffer);
     } else if (mimetype.includes('word') || mimetype.includes('document') || fileUrl.endsWith('.docx')) {
-      return await parseWord(buffer);
+      return await parseWord(arrayBuffer);
     } else if (mimetype.includes('text') || mimetype.includes('markdown') || fileUrl.endsWith('.md') || fileUrl.endsWith('.txt')) {
       return buffer.toString('utf-8');
     } else {
@@ -91,10 +98,8 @@ async function parsePDF(buffer: Buffer): Promise<string> {
   }
 }
 
-async function parseWord(buffer: Buffer): Promise<string> {
+async function parseWord(arrayBuffer: ArrayBuffer): Promise<string> {
   try {
-    // Convert Buffer to ArrayBuffer for mammoth
-    const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
     const result = await extractRawText({ arrayBuffer });
     return result.value;
   } catch (error) {
