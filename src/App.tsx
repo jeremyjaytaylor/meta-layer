@@ -299,7 +299,8 @@ function App() {
         id: task.id, 
         mainMessage: { 
             text: task.title, 
-            user: task.metadata.author 
+            user: task.metadata.author,
+            files: task.metadata.fileData ? [task.metadata.fileData] : []
         }, 
         thread: [], 
         source: 'slack',

@@ -291,17 +291,25 @@ async function parseMessage(match: any, context: SlackContext): Promise<UnifiedT
       
       // Download and parse file content
       let fullContent = f.preview || f.plain_text || "";
-      if (f.url_private_download) {
-        console.log(`📥 Downloading file: ${fileTitle}...`);
+      
+      // Try multiple URL fields that Slack uses
+      const downloadUrl = f.url_private_download || f.url_private;
+      
+      if (downloadUrl) {
+        console.log(`📥 Downloading file: ${fileTitle} (${f.mimetype})...`);
         const parsedContent = await downloadAndParseFile(
-          f.url_private_download,
+          downloadUrl,
           f.mimetype || '',
           SLACK_TOKEN
         );
         if (parsedContent) {
           fullContent = parsedContent;
           console.log(`✅ Extracted ${parsedContent.length} characters from ${fileTitle}`);
+        } else {
+          console.warn(`⚠️ Failed to extract content from ${fileTitle}`);
         }
+      } else {
+        console.log(`ℹ️ No download URL for ${fileTitle}, using preview only`);
       }
       
       // Store file data for AI ingestion

@@ -33,6 +33,8 @@ function minifySignals(signals: any[]): any[] {
     // Append File Preview (Email Body, PDF, Docs, etc.)
     if (s.mainMessage?.files && Array.isArray(s.mainMessage.files) && s.mainMessage.files.length > 0) {
         const f = s.mainMessage.files[0];
+        console.log(`📄 Processing file in minifySignals: ${f.title || f.name}, preview length: ${f.preview?.length || 0}`);
+        
         if (f.title || f.name) {
           content += `\n\n--- ATTACHED FILE ---`;
           content += `\nFile Name: ${f.title || f.name}`;
@@ -41,6 +43,9 @@ function minifySignals(signals: any[]): any[] {
         // Include file preview/content if available
         if (f.preview) {
           content += `\n\nFILE CONTENTS:\n${f.preview}`;
+          console.log(`✅ Added ${f.preview.length} characters of file content to signal`);
+        } else {
+          console.warn(`⚠️ No preview content available for ${f.title || f.name}`);
         }
         content += `\n--- END FILE ---`;
     }
