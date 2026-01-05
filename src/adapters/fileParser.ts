@@ -78,10 +78,12 @@ async function parsePDF(buffer: Buffer): Promise<string> {
   try {
     const parse = await getPdfParse();
     if (!parse || typeof parse !== 'function') {
-      console.error('PDF parser not loaded correctly');
+      console.error('PDF parser not loaded correctly, type:', typeof parse);
       return '';
     }
-    const data = await parse(buffer);
+    // Convert Buffer to Uint8Array for pdf-parse
+    const uint8Array = new Uint8Array(buffer);
+    const data = await parse(uint8Array);
     return data.text || '';
   } catch (error) {
     console.error('PDF parsing error:', error);
@@ -91,7 +93,9 @@ async function parsePDF(buffer: Buffer): Promise<string> {
 
 async function parseWord(buffer: Buffer): Promise<string> {
   try {
-    const result = await extractRawText({ buffer });
+    // Convert Buffer to ArrayBuffer for mammoth
+    const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+    const result = await extractRawText({ arrayBuffer });
     return result.value;
   } catch (error) {
     console.error('Word document parsing error:', error);

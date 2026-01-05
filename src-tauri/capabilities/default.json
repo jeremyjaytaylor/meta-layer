@@ -19,6 +19,12 @@
           "url": "https://files.slack.com/**"
         },
         {
+          "url": "https://docs.google.com/**"
+        },
+        {
+          "url": "https://drive.google.com/**"
+        },
+        {
           "url": "https://app.asana.com/**",
           "method": "*"
         }
