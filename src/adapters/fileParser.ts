@@ -1,8 +1,15 @@
 import { fetch } from '@tauri-apps/plugin-http';
-// @ts-ignore - pdf-parse has module resolution issues
-import pdfParse from 'pdf-parse';
-import * as mammoth from 'mammoth';
+import { extractRawText } from 'mammoth';
 import { Buffer } from 'buffer';
+
+// Dynamic import for pdf-parse to avoid ESM/CJS issues
+let pdfParse: any = null;
+async function getPdfParse() {
+  if (!pdfParse) {
+    pdfParse = (await import('pdf-parse')).default;
+  }
+  return pdfParse;
+}
 
 /**
  * Downloads and extracts text content from files
@@ -53,8 +60,8 @@ export async function downloadAndParseFile(
 
 async function parsePDF(buffer: Buffer): Promise<string> {
   try {
-    // @ts-ignore
-    const data = await pdfParse(buffer);
+    const parse = await getPdfParse();
+    const data = await parse(buffer);
     return data.text;
   } catch (error) {
     console.error('PDF parsing error:', error);
@@ -64,7 +71,7 @@ async function parsePDF(buffer: Buffer): Promise<string> {
 
 async function parseWord(buffer: Buffer): Promise<string> {
   try {
-    const result = await mammoth.extractRawText({ buffer });
+    const result = await extractRawText({ buffer });
     return result.value;
   } catch (error) {
     console.error('Word document parsing error:', error);

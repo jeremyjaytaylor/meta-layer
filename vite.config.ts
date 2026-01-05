@@ -29,4 +29,12 @@ export default defineConfig(async () => ({
       ignored: ["**/src-tauri/**"],
     },
   },
+  resolve: {
+    alias: {
+      buffer: 'buffer/'
+    }
+  },
+  define: {
+    global: 'globalThis'
+  }
 }));
