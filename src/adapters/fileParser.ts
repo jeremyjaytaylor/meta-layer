@@ -11,6 +11,19 @@ async function getPdfParse() {
   return pdfParse;
 }
 
+// Rate limiting to avoid 429 errors
+let lastDownloadTime = 0;
+const MIN_DOWNLOAD_INTERVAL = 500; // 500ms between downloads
+
+async function rateLimit() {
+  const now = Date.now();
+  const timeSinceLastDownload = now - lastDownloadTime;
+  if (timeSinceLastDownload < MIN_DOWNLOAD_INTERVAL) {
+    await new Promise(resolve => setTimeout(resolve, MIN_DOWNLOAD_INTERVAL - timeSinceLastDownload));
+  }
+  lastDownloadTime = Date.now();
+}
+
 /**
  * Downloads and extracts text content from files
  */
@@ -20,6 +33,9 @@ export async function downloadAndParseFile(
   token: string
 ): Promise<string | null> {
   try {
+    // Rate limit to avoid 429 errors
+    await rateLimit();
+    
     // Download the file
     const response = await fetch(fileUrl, {
       headers: {
@@ -61,8 +77,12 @@ export async function downloadAndParseFile(
 async function parsePDF(buffer: Buffer): Promise<string> {
   try {
     const parse = await getPdfParse();
+    if (!parse || typeof parse !== 'function') {
+      console.error('PDF parser not loaded correctly');
+      return '';
+    }
     const data = await parse(buffer);
-    return data.text;
+    return data.text || '';
   } catch (error) {
     console.error('PDF parsing error:', error);
     return '';

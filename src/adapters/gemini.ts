@@ -114,6 +114,31 @@ async function runWithCascade(prompt: string, maxRetriesPerModel: number): Promi
   throw lastError || new Error("All models failed. Check your API key and network connection.");
 }
 
+export async function generateFileSummary(fileContent: string, fileName: string): Promise<string> {
+  try {
+    // Truncate very long content
+    const truncated = fileContent.substring(0, 3000);
+    const prompt = `Summarize this file in 1-2 concise sentences (max 150 chars total).
+    
+File: ${fileName}
+Content: ${truncated}
+
+Output only the summary text, no JSON.`;
+
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+    const result = await model.generateContent(prompt);
+    const summary = result.response.text().trim();
+    
+    // Ensure it's not too long
+    return summary.length > 150 ? summary.substring(0, 147) + '...' : summary;
+  } catch (error) {
+    console.error('Failed to generate summary:', error);
+    // Fallback to first sentence of content
+    const firstSentence = fileContent.split(/[.!?]\s/)[0];
+    return firstSentence.length > 150 ? firstSentence.substring(0, 147) + '...' : firstSentence;
+  }
+}
+
 export async function smartParseSlack(
   rawMessages: any[], 
   availableProjects: string[]

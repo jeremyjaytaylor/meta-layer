@@ -1,6 +1,7 @@
 import { fetch } from '@tauri-apps/plugin-http';
 import { UnifiedTask, SlackContext, SlackUser, SlackChannel } from '../types/unified';
 import { downloadAndParseFile } from './fileParser';
+import { generateFileSummary } from './gemini';
 
 const SLACK_TOKEN = import.meta.env.VITE_SLACK_TOKEN;
 const MAX_PAGES = 10;
@@ -313,10 +314,13 @@ async function parseMessage(match: any, context: SlackContext): Promise<UnifiedT
         console.log(`ℹ️ No download URL for ${fileTitle}, using preview only (${fullContent.length} chars)`);
       }
       
-      // Create title with content preview
-      const contentPreview = fullContent.substring(0, 150).trim();
-      if (contentPreview) {
-        title = `📧 ${fileTitle}: ${contentPreview}${fullContent.length > 150 ? '...' : ''}`;
+      // Generate AI summary for the title
+      let contentSummary = '';
+      if (fullContent.length > 0) {
+        console.log(`🤖 Generating AI summary for ${fileTitle}...`);
+        contentSummary = await generateFileSummary(fullContent, fileTitle);
+        console.log(`✅ Generated summary: ${contentSummary}`);
+        title = `📧 ${fileTitle}: ${contentSummary}`;
       } else {
         title = `📧 ${fileTitle}`;
       }
