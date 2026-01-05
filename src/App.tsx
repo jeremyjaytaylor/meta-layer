@@ -149,7 +149,9 @@ function App() {
         setSlackTasks(active);
       }
       if (asanaData.status === 'fulfilled' && Array.isArray(asanaData.value)) {
-        setAsanaTasks(asanaData.value);
+        // Deduplicate Asana tasks by ID
+        const uniqueTasks = Array.from(new Map(asanaData.value.map(t => [t.id, t])).values());
+        setAsanaTasks(uniqueTasks);
       }
     } catch (e) {
       console.error("Sync error:", e);
