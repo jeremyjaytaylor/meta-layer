@@ -69,16 +69,18 @@ async function parsePDF(buffer: Buffer): Promise<string> {
   try {
     console.log('📄 Parsing PDF with buffer of size:', buffer.length);
 
-    // Parse directly with pdfjs-dist, disable worker and set workerSrc to avoid errors
+    // Parse directly with pdfjs-dist, using bundled worker URL (avoid external 404s)
     const pdfjsLib = await import('pdfjs-dist');
-    const workerUrl = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@5.4.296/build/pdf.worker.min.js';
+    const workerModule = await import('pdfjs-dist/build/pdf.worker.min.mjs?url');
+    const workerUrl = (workerModule as any).default;
     if ((pdfjsLib as any).GlobalWorkerOptions) {
       (pdfjsLib as any).GlobalWorkerOptions.workerSrc = workerUrl;
+      console.log('✅ Using bundled PDF.js worker:', workerUrl);
     }
 
     const loadingTask = (pdfjsLib as any).getDocument({
       data: buffer,
-      disableWorker: true,
+      disableWorker: false,
       isEvalSupported: false
     });
 
