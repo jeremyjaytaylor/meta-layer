@@ -9,22 +9,52 @@ if (!API_KEY) {
   throw new Error("VITE_GEMINI_API_KEY environment variable is not set. Please configure it in your .env file.");
 }
 
-// Use GAIA v1 endpoints so the latest 1.5 models resolve instead of 404-ing on v1beta
-const genAI = new GoogleGenerativeAI(API_KEY, { apiVersion: "v1" });
+// Use default client (v1beta). Many keys only expose v1beta models.
+const genAI = new GoogleGenerativeAI(API_KEY);
 
 export interface ParsedMessage { msgId: string; suggestedProject: string; }
 export interface ProposedTask { title: string; description: string; project: string; subtasks: string[]; citations: string[]; sourceLinks: { text: string; url: string; }[]; }
 export interface AiSuggestion { title: string; projectName: string; reasoning: string; }
 
-// STRATEGY: Stable Cascade - only use GAIA v1-available model IDs
-// Keep fastest first; include 1.0 fallback for older API keys/quotas.
-const MODEL_CASCADE = [
-  "gemini-1.5-flash-002",
-  "gemini-1.5-pro-002",
-  "gemini-1.5-flash",
-  "gemini-1.5-pro",
-  "gemini-1.0-pro",
-];
+// Dynamic model discovery: ask API for available models for this key (v1beta)
+let discoveredModels: string[] | null = null;
+const failingModels = new Set<string>();
+
+async function discoverModels(): Promise<string[]> {
+  if (discoveredModels) return discoveredModels;
+  try {
+    const resp = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${API_KEY}`
+    );
+    if (!resp.ok) throw new Error(`list models failed: ${resp.status}`);
+    const data = await resp.json() as any;
+    const names: string[] = Array.isArray(data.models)
+      ? data.models.map((m: any) => m.name).filter((n: string) => typeof n === "string")
+      : [];
+
+    // Heuristic order: prefer 1.5 flash, then 1.5 pro, then any others
+    const score = (n: string) => {
+      let s = 0;
+      if (n.includes("1.5")) s += 3;
+      if (n.includes("flash")) s += 2;
+      if (n.includes("pro")) s += 1;
+      return s;
+    };
+    names.sort((a, b) => score(b) - score(a));
+
+    discoveredModels = names.length > 0 ? names : [];
+    return discoveredModels;
+  } catch (err) {
+    console.warn("Model discovery failed; using minimal fallback", err);
+    // Minimal fallback list; may still 404, we'll short-circuit on first error
+    discoveredModels = [
+      "gemini-1.5-flash",
+      "gemini-1.5-pro",
+      "gemini-1.0-pro",
+    ];
+    return discoveredModels;
+  }
+}
 
 // BUDGETS: stay well under the 1M token cap
 const MAX_CHARS_PER_FILE_CONTENT = 4000;
@@ -107,8 +137,12 @@ function minifySignals(signals: any[]): any[] {
 
 async function runWithCascade(prompt: string, maxRetriesPerModel: number): Promise<any> {
   let lastError: Error | null = null;
+  const modelList = (await discoverModels()).filter(m => !failingModels.has(m));
+  if (modelList.length === 0) {
+    throw new Error("No accessible Gemini models for this API key (v1beta). Please check your key or enable models.");
+  }
 
-  for (const modelName of MODEL_CASCADE) {
+  for (const modelName of modelList) {
     const model = genAI.getGenerativeModel({ model: modelName });
     
     for (let attempt = 0; attempt <= maxRetriesPerModel; attempt++) {
@@ -139,7 +173,8 @@ async function runWithCascade(prompt: string, maxRetriesPerModel: number): Promi
         }
 
         if (msg.includes("404") || msg.includes("not found")) {
-          console.warn(`Model ${modelName} not available, trying next...`);
+          console.warn(`Model ${modelName} not available, skipping future attempts...`);
+          failingModels.add(modelName);
           break;
         }
         break;
@@ -161,10 +196,10 @@ Content: ${truncated}
 
 Output only the summary text, no JSON.`;
 
-    // Try fast model first, then fallback through cascade if it 404s
-    const summaryModels = ["gemini-1.5-flash-002", "gemini-1.5-flash", "gemini-1.0-pro"];
-    let lastErr: any;
-    for (const m of summaryModels) {
+    // Use first discovered accessible model; if 404, mark failing and fallback quickly
+    const modelList = (await discoverModels()).filter(m => !failingModels.has(m));
+    if (modelList.length > 0) {
+      const m = modelList[0];
       try {
         const model = genAI.getGenerativeModel({ model: m });
         const result = await model.generateContent(prompt);
@@ -172,16 +207,13 @@ Output only the summary text, no JSON.`;
         const clipped = summary.length > 150 ? summary.substring(0, 147) + "..." : summary;
         return clipped;
       } catch (err: any) {
-        lastErr = err;
         const msg = err?.message || "";
-        console.warn(`Summary model ${m} failed (${msg}). Trying next...`);
-        if (msg.includes("404")) continue;
-        // Non-404 errors: break to fallback
-        break;
+        console.warn(`Summary model ${m} failed (${msg}).`);
+        if (msg.includes("404")) failingModels.add(m);
       }
     }
 
-    throw lastErr || new Error("All summary models failed");
+    throw new Error("No working Gemini model found for summary");
   } catch (error) {
     console.error("Failed to generate summary:", error);
     // Fallback to first sentence of content
