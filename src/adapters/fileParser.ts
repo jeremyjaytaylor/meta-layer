@@ -78,14 +78,10 @@ async function parsePDF(buffer: Buffer): Promise<string> {
     // Configure GlobalWorkerOptions for pdf.js (used internally by pdf-parse)
     const pdfjsLib = (pdfParseModule as any).pdfjsLib || (globalThis as any).pdfjsLib;
     if (pdfjsLib && pdfjsLib.GlobalWorkerOptions) {
-      // Use version 5.4.296 to match the API version - try multiple CDN URLs
-      const workerUrls = [
-        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/5.4.296/pdf.worker.min.js',
-        'https://unpkg.com/pdfjs-dist@5.4.296/build/pdf.worker.min.js',
-        'https://cdn.jsdelivr.net/npm/pdfjs-dist@5.4.296/build/pdf.worker.min.js'
-      ];
-      pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrls[0];
-      console.log('✅ Configured PDF.js worker v5.4.296');
+      // Use version 5.4.296 to match the API version; prefer jsdelivr ESM build
+      const workerUrl = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@5.4.296/build/pdf.worker.min.mjs';
+      pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
+      console.log('✅ Configured PDF.js worker v5.4.296 from jsdelivr');
     }
     
     // The pdf-parse library exports a PDFParse class that needs to be instantiated
