@@ -71,10 +71,6 @@ async function parsePDF(buffer: Buffer): Promise<string> {
 
     // Parse directly with pdfjs-dist, disable worker to avoid network fetches
     const pdfjsLib = await import('pdfjs-dist');
-    if (pdfjsLib && (pdfjsLib as any).GlobalWorkerOptions) {
-      (pdfjsLib as any).GlobalWorkerOptions.workerSrc = null;
-      console.log('✅ Disabled PDF.js worker (using main thread)');
-    }
 
     const loadingTask = (pdfjsLib as any).getDocument({
       data: buffer,
