@@ -71,55 +71,61 @@ async function parsePDF(buffer: Buffer): Promise<string> {
     
     // Dynamic import pdf-parse
     const pdfParseModule = await import('pdf-parse');
-    
-    // Get the PDFParse class from the module
-    const PDFParseClass = (pdfParseModule as any).PDFParse;
-    
-    if (!PDFParseClass) {
-      console.error('❌ PDFParse class not found in module');
-      return '';
-    }
+    console.log('📦 pdf-parse module keys:', Object.keys(pdfParseModule));
     
     // Configure GlobalWorkerOptions for pdf.js (used internally by pdf-parse)
-    // This is required for the PDF parser to work
     const pdfjsLib = (pdfParseModule as any).pdfjsLib || (globalThis as any).pdfjsLib;
     if (pdfjsLib && pdfjsLib.GlobalWorkerOptions) {
-      // Use a CDN version of the worker
       pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
       console.log('✅ Configured PDF.js worker');
     }
     
-    console.log('✅ Found PDFParse class, instantiating...');
+    // Try multiple ways to call pdf-parse
+    let result: any;
     
-    // Instantiate the class with the buffer - the constructor might return a promise
-    const parserOrPromise = new PDFParseClass(buffer);
+    // Method 1: Direct function call (most common)
+    if (typeof (pdfParseModule as any).default === 'function') {
+      console.log('🔧 Trying method 1: default function');
+      result = await (pdfParseModule as any).default(buffer);
+    }
+    // Method 2: PDFParse class
+    else if ((pdfParseModule as any).PDFParse) {
+      console.log('🔧 Trying method 2: PDFParse class');
+      const PDFParseClass = (pdfParseModule as any).PDFParse;
+      const parser = new PDFParseClass(buffer);
+      result = parser instanceof Promise ? await parser : parser;
+    }
+    // Method 3: Named export
+    else if (typeof pdfParseModule === 'function') {
+      console.log('🔧 Trying method 3: module as function');
+      result = await pdfParseModule(buffer);
+    }
+    else {
+      console.error('❌ Could not determine how to call pdf-parse');
+      console.log('   Available methods:', Object.keys(pdfParseModule));
+      return '';
+    }
     
-    console.log('   Parser/Promise type:', typeof parserOrPromise);
-    console.log('   Is Promise:', parserOrPromise instanceof Promise);
-    
-    // If it's a promise, await it
-    const result = parserOrPromise instanceof Promise ? await parserOrPromise : parserOrPromise;
-    
-    console.log('📊 Result type:', typeof result);
-    console.log('   Result keys:', result ? Object.keys(result).join(', ') : 'null');
+    console.log('📊 Parse result type:', typeof result);
+    console.log('   Result keys:', result ? Object.keys(result).slice(0, 10).join(', ') : 'null');
     
     // Extract text from result
     if (result && typeof result.text === 'string') {
       console.log(`✅ PDF parsed successfully: ${result.text.length} characters`);
+      console.log(`   First 200 chars: ${result.text.substring(0, 200)}`);
       return result.text;
     }
     
-    // Maybe the result is directly on the parser object
-    if (result && typeof result.getText === 'function') {
-      const text = result.getText();
-      console.log(`✅ PDF parsed via getText(): ${text.length} characters`);
-      return text;
-    }
-    
-    console.warn('⚠️ PDF parse result has unexpected structure, keys:', result ? Object.keys(result) : 'none');
+    console.error('⚠️ PDF result missing text property. Available keys:', result ? Object.keys(result) : 'none');
     return '';
   } catch (error) {
     console.error('❌ PDF parsing error:', error);
+    // Print detailed error info
+    if (error instanceof Error) {
+      console.error('   Error name:', error.name);
+      console.error('   Error message:', error.message);
+      console.error('   Stack:', error.stack?.substring(0, 300));
+    }
     return '';
   }
 }
