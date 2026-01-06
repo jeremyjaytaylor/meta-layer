@@ -83,10 +83,55 @@ export async function downloadAndParseFile(
 
 async function parsePDF(buffer: Buffer): Promise<string> {
   try {
-    // PDF parsing disabled due to browser compatibility issues with pdf-parse library
-    // The library's API is not compatible with browser environments
-    console.warn('PDF parsing currently disabled - browser compatibility issues');
-    return '';
+    const pdfParseModule = await getPdfParse();
+    if (!pdfParseModule) {
+      console.error('PDF parser module not loaded');
+      return '';
+    }
+    
+    // Try different ways to call pdf-parse
+    // Standard usage: const data = await pdfParse(buffer)
+    let parseFn = null;
+    
+    // Try 1: Module itself might be the function (CommonJS default export)
+    if (typeof pdfParseModule === 'function') {
+      parseFn = pdfParseModule;
+    }
+    // Try 2: ES6 default export
+    else if (typeof pdfParseModule.default === 'function') {
+      parseFn = pdfParseModule.default;
+    }
+    // Try 3: Named export
+    else if (typeof pdfParseModule.pdfParse === 'function') {
+      parseFn = pdfParseModule.pdfParse;
+    }
+    
+    if (!parseFn) {
+      console.error('Could not find pdf-parse function. Module type:', typeof pdfParseModule);
+      console.error('Module keys:', Object.keys(pdfParseModule));
+      console.error('Trying each key to find callable function...');
+      
+      // Last resort: try to find any callable function in the module
+      for (const key of Object.keys(pdfParseModule)) {
+        if (typeof pdfParseModule[key] === 'function' && key !== 'constructor') {
+          console.log(`Trying key: ${key}`);
+          parseFn = pdfParseModule[key];
+          break;
+        }
+      }
+    }
+    
+    if (!parseFn) {
+      console.error('No callable function found in pdf-parse module');
+      return '';
+    }
+    
+    // Convert Buffer to Uint8Array
+    const uint8Array = new Uint8Array(buffer);
+    
+    // Call the parse function
+    const data = await parseFn(uint8Array);
+    return data.text || '';
   } catch (error) {
     console.error('PDF parsing error:', error);
     return '';
