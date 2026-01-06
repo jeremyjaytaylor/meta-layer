@@ -71,28 +71,28 @@ async function parsePDF(buffer: Buffer): Promise<string> {
     
     // Dynamic import pdf-parse
     const pdfParseModule = await import('pdf-parse');
-    const pdfParse = (pdfParseModule as any).default || pdfParseModule;
     
-    console.log('   pdfParse type:', typeof pdfParse);
+    // Get the PDFParse class from the module
+    const PDFParseClass = (pdfParseModule as any).PDFParse;
     
-    if (typeof pdfParse !== 'function') {
-      console.error('❌ pdfParse is not a function, trying to use it anyway...');
-      // It might be an object with a default property
-      const parser = (pdfParse as any).default || pdfParse;
-      if (typeof parser === 'function') {
-        const result = await parser(buffer);
-        if (result && typeof result.text === 'string') {
-          console.log(`✅ PDF parsed successfully: ${result.text.length} characters`);
-          return result.text;
-        }
-      }
+    if (!PDFParseClass) {
+      console.error('❌ PDFParse class not found in module');
       return '';
     }
     
-    // Call pdf-parse with the buffer
-    const result = await pdfParse(buffer);
+    console.log('✅ Found PDFParse class, instantiating...');
     
-    console.log('📊 PDF parse result keys:', result ? Object.keys(result).join(', ') : 'null');
+    // Instantiate the class with the buffer - the constructor might return a promise
+    const parserOrPromise = new PDFParseClass(buffer);
+    
+    console.log('   Parser/Promise type:', typeof parserOrPromise);
+    console.log('   Is Promise:', parserOrPromise instanceof Promise);
+    
+    // If it's a promise, await it
+    const result = parserOrPromise instanceof Promise ? await parserOrPromise : parserOrPromise;
+    
+    console.log('📊 Result type:', typeof result);
+    console.log('   Result keys:', result ? Object.keys(result).join(', ') : 'null');
     
     // Extract text from result
     if (result && typeof result.text === 'string') {
@@ -100,7 +100,14 @@ async function parsePDF(buffer: Buffer): Promise<string> {
       return result.text;
     }
     
-    console.warn('⚠️ PDF parse result has unexpected structure');
+    // Maybe the result is directly on the parser object
+    if (result && typeof result.getText === 'function') {
+      const text = result.getText();
+      console.log(`✅ PDF parsed via getText(): ${text.length} characters`);
+      return text;
+    }
+    
+    console.warn('⚠️ PDF parse result has unexpected structure, keys:', result ? Object.keys(result) : 'none');
     return '';
   } catch (error) {
     console.error('❌ PDF parsing error:', error);
