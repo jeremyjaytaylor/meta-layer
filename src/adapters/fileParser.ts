@@ -89,18 +89,21 @@ async function parsePDF(buffer: Buffer): Promise<string> {
       return '';
     }
     
-    // The module has a PDFParse function we need to use
-    const parse = module.PDFParse || module.default || module;
+    // The module has a PDFParse class that needs to be instantiated
+    const PDFParseClass = module.PDFParse;
     
-    if (!parse || typeof parse !== 'function') {
-      console.error('PDFParse function not found in module');
+    if (!PDFParseClass) {
+      console.error('PDFParse class not found in module');
       console.error('Available keys:', Object.keys(module));
       return '';
     }
     
     // Convert Buffer to Uint8Array for pdf-parse
     const uint8Array = new Uint8Array(buffer);
-    const data = await parse(uint8Array);
+    
+    // Instantiate and parse
+    const parser = new PDFParseClass(uint8Array);
+    const data = await parser.parse();
     return data.text || '';
   } catch (error) {
     console.error('PDF parsing error:', error);
