@@ -69,8 +69,12 @@ async function parsePDF(buffer: Buffer): Promise<string> {
   try {
     console.log('📄 Parsing PDF with buffer of size:', buffer.length);
 
-    // Parse directly with pdfjs-dist, disable worker to avoid network fetches
+    // Parse directly with pdfjs-dist, disable worker and set workerSrc to avoid errors
     const pdfjsLib = await import('pdfjs-dist');
+    const workerUrl = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@5.4.296/build/pdf.worker.min.js';
+    if ((pdfjsLib as any).GlobalWorkerOptions) {
+      (pdfjsLib as any).GlobalWorkerOptions.workerSrc = workerUrl;
+    }
 
     const loadingTask = (pdfjsLib as any).getDocument({
       data: buffer,
