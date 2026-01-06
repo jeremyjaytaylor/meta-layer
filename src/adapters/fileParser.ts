@@ -89,24 +89,13 @@ async function parsePDF(buffer: Buffer): Promise<string> {
       return '';
     }
     
-    // The module itself should be callable as a function
-    const parse = typeof module === 'function' ? module : (module.default || module);
+    // The module has a PDFParse function we need to use
+    const parse = module.PDFParse || module.default || module;
     
-    if (typeof parse !== 'function') {
-      // Log module structure for debugging
-      console.error('PDF parser is not a function. Module type:', typeof module);
-      console.error('Module keys:', Object.keys(module));
-      console.error('Module.default type:', typeof module.default);
-      
-      // Try to call the module directly anyway
-      try {
-        const uint8Array = new Uint8Array(buffer);
-        const data = await module(uint8Array);
-        return data.text || '';
-      } catch (e) {
-        console.error('Failed to call module directly:', e);
-        return '';
-      }
+    if (!parse || typeof parse !== 'function') {
+      console.error('PDFParse function not found in module');
+      console.error('Available keys:', Object.keys(module));
+      return '';
     }
     
     // Convert Buffer to Uint8Array for pdf-parse
