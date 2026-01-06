@@ -17,20 +17,40 @@ export interface AiSuggestion { title: string; projectName: string; reasoning: s
 
 // STRATEGY: Stable Cascade - Only use valid, existing models
 const MODEL_CASCADE = [
-  "gemini-2.0-flash",
-  "gemini-2.0-pro",
-  "gemini-1.5-flash",
+  "gemini-1.5-pro-latest",
+  "gemini-1.5-flash-latest",
   "gemini-1.5-pro",
+  "gemini-1.5-flash",
 ];
+
+// BUDGETS: stay well under the 1M token cap
+const MAX_CHARS_PER_FILE_CONTENT = 4000;
+const MAX_CHARS_PER_SIGNAL = 6000;
+const MAX_TOTAL_SIGNAL_CHARS = 180000;
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 // FIX: Extract Email/File Content for AI
+function truncateText(text: string, limit: number): string {
+  if (!text || text.length <= limit) return text;
+  return `${text.slice(0, limit)}... [truncated]`;
+}
+
+function enforceTotalBudget(items: any[]): any[] {
+  let running = 0;
+  return items.map((item) => {
+    const remaining = Math.max(MAX_TOTAL_SIGNAL_CHARS - running, 0);
+    const clipped = truncateText(item.text, remaining);
+    running += clipped.length;
+    return { ...item, text: clipped };
+  });
+}
+
 function minifySignals(signals: any[]): any[] {
   console.log(`🔄 minifySignals processing ${signals.length} signals...`);
   console.log(`📋 First signal structure:`, JSON.stringify(signals[0], null, 2).substring(0, 500));
   
-  return signals.map((s, idx) => {
+  const mapped = signals.map((s, idx) => {
     let content = s.mainMessage?.text || "";
     
     console.log(`🔍 Signal ${idx} mainMessage structure:`, {
@@ -55,15 +75,17 @@ function minifySignals(signals: any[]): any[] {
         }
         // Include file preview/content if available
         if (f.preview && f.preview.length > 0) {
-          content += `\n\nFILE CONTENTS:\n${f.preview}`;
-          console.log(`✅ Signal ${idx}: Added ${f.preview.length} characters of file content`);
-          console.log(`   Content preview: ${f.preview.substring(0, 100)}...`);
+          const clippedPreview = truncateText(f.preview, MAX_CHARS_PER_FILE_CONTENT);
+          content += `\n\nFILE CONTENTS:\n${clippedPreview}`;
+          console.log(`✅ Signal ${idx}: Added ${clippedPreview.length} characters of file content`);
+          console.log(`   Content preview: ${clippedPreview.substring(0, 100)}...`);
         } else {
           console.warn(`⚠️ Signal ${idx}: No preview content available for ${f.title || f.name}`);
         }
         content += `\n--- END FILE ---`;
     }
     
+    content = truncateText(content, MAX_CHARS_PER_SIGNAL);
     console.log(`📊 Signal ${idx} final content length: ${content.length}`);
 
     return {
@@ -76,6 +98,8 @@ function minifySignals(signals: any[]): any[] {
       replies: Array.isArray(s.thread) ? s.thread.map((t: any) => ({ user: t.user, text: t.text })) : []
     };
   });
+
+  return enforceTotalBudget(mapped);
 }
 
 async function runWithCascade(prompt: string, maxRetriesPerModel: number): Promise<any> {
@@ -134,7 +158,7 @@ Content: ${truncated}
 
 Output only the summary text, no JSON.`;
 
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
     const result = await model.generateContent(prompt);
     const summary = result.response.text().trim();
     
