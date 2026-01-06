@@ -33,12 +33,15 @@ async function discoverModels(): Promise<string[]> {
           .map((m: any) => m.name)
           .filter((n: string) => typeof n === "string")
           .map((n: string) => n.replace(/^models\//, "")) // Strip 'models/' prefix
+          // Filter out experimental/preview models that cause timeouts
+          .filter((n: string) => !n.includes("preview") && !n.includes("robotics") && !n.includes("exp-"))
       : [];
 
-    // Heuristic order: prefer 1.5 flash, then 1.5 pro, then any others
+    // Heuristic order: prefer 1.5 flash, then 1.5 pro, then 2.5, then any others
     const score = (n: string) => {
       let s = 0;
       if (n.includes("1.5")) s += 3;
+      if (n.includes("2.5")) s += 2;
       if (n.includes("flash")) s += 2;
       if (n.includes("pro")) s += 1;
       return s;
@@ -46,6 +49,7 @@ async function discoverModels(): Promise<string[]> {
     names.sort((a, b) => score(b) - score(a));
 
     discoveredModels = names.length > 0 ? names : [];
+    console.log(`✅ Discovered ${discoveredModels.length} stable models:`, discoveredModels.slice(0, 5));
     return discoveredModels;
   } catch (err) {
     console.warn("Model discovery failed; using minimal fallback", err);
@@ -152,7 +156,11 @@ async function runWithCascade(prompt: string, maxRetriesPerModel: number): Promi
       try {
         if (attempt > 0) console.log(`🔄 Retry ${attempt} on ${modelName}...`);
         
-        const result = await model.generateContent(prompt);
+        // Add timeout to prevent indefinite hangs (15s)
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error("Request timeout after 15s")), 15000)
+        );
+        const result = await Promise.race([model.generateContent(prompt), timeoutPromise]) as any;
         const text = result.response.text();
         const cleanJson = text.replace(/```json|```/g, '').trim();
         
