@@ -1,7 +1,6 @@
 import { fetch } from '@tauri-apps/plugin-http';
 import { extractRawText } from 'mammoth';
 import { Buffer } from 'buffer';
-import pdfParse from 'pdf-parse';
 
 // Rate limiting to avoid 429 errors
 let lastDownloadTime = 0;
@@ -69,18 +68,31 @@ export async function downloadAndParseFile(
 async function parsePDF(buffer: Buffer): Promise<string> {
   try {
     console.log('📄 Parsing PDF with buffer of size:', buffer.length);
+    
+    // Dynamic import pdf-parse
+    const pdfParseModule = await import('pdf-parse');
+    const pdfParse = (pdfParseModule as any).default || pdfParseModule;
+    
     console.log('   pdfParse type:', typeof pdfParse);
     
     if (typeof pdfParse !== 'function') {
-      console.error('❌ pdfParse is not a function, type:', typeof pdfParse);
+      console.error('❌ pdfParse is not a function, trying to use it anyway...');
+      // It might be an object with a default property
+      const parser = (pdfParse as any).default || pdfParse;
+      if (typeof parser === 'function') {
+        const result = await parser(buffer);
+        if (result && typeof result.text === 'string') {
+          console.log(`✅ PDF parsed successfully: ${result.text.length} characters`);
+          return result.text;
+        }
+      }
       return '';
     }
     
     // Call pdf-parse with the buffer
     const result = await pdfParse(buffer);
     
-    console.log('📊 PDF parse result type:', typeof result);
-    console.log('   Result keys:', result ? Object.keys(result).join(', ') : 'null');
+    console.log('📊 PDF parse result keys:', result ? Object.keys(result).join(', ') : 'null');
     
     // Extract text from result
     if (result && typeof result.text === 'string') {
