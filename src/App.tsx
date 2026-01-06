@@ -163,6 +163,18 @@ function App() {
     }
   };
 
+  // Debounce sync triggers to avoid overlapping calls
+  const syncDebounceRef = useRef<number | null>(null);
+  const requestSync = (ctx: SlackContext) => {
+    if (!ctx) return;
+    if (syncDebounceRef.current) {
+      clearTimeout(syncDebounceRef.current);
+    }
+    syncDebounceRef.current = window.setTimeout(() => {
+      sync(ctx);
+    }, 300);
+  };
+
   useEffect(() => {
     const init = async () => {
       try {
@@ -181,14 +193,14 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (slackContext) sync(slackContext);
+    if (slackContext) requestSync(slackContext);
   }, [slackContext, timeRange, customStart, customEnd]);
 
   const clearArchive = () => {
     if (confirm("Are you sure you want to un-archive all messages?")) {
       try {
         localStorage.removeItem("meta_archived_ids");
-        if (slackContext) sync(slackContext); 
+        if (slackContext) requestSync(slackContext); 
       } catch (e) {
         console.error("Failed to clear archive:", e);
         alert("Failed to clear archive");
@@ -234,7 +246,7 @@ function App() {
   const handleCompleteTask = async (taskId: string) => {
     setAsanaTasks(currentTasks => currentTasks.filter(t => t.externalId !== taskId));
     const success = await completeAsanaTask(taskId);
-    if (!success && slackContext) sync(slackContext); 
+    if (!success && slackContext) requestSync(slackContext); 
   };
 
   // FIX: Add null check for task and error handling
