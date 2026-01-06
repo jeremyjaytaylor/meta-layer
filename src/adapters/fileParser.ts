@@ -89,49 +89,33 @@ async function parsePDF(buffer: Buffer): Promise<string> {
       return '';
     }
     
-    // Try different ways to call pdf-parse
-    // Standard usage: const data = await pdfParse(buffer)
-    let parseFn = null;
+    // The module exports PDFParse as a class
+    const PDFParseClass = pdfParseModule.PDFParse;
     
-    // Try 1: Module itself might be the function (CommonJS default export)
-    if (typeof pdfParseModule === 'function') {
-      parseFn = pdfParseModule;
-    }
-    // Try 2: ES6 default export
-    else if (typeof pdfParseModule.default === 'function') {
-      parseFn = pdfParseModule.default;
-    }
-    // Try 3: Named export
-    else if (typeof pdfParseModule.pdfParse === 'function') {
-      parseFn = pdfParseModule.pdfParse;
-    }
-    
-    if (!parseFn) {
-      console.error('Could not find pdf-parse function. Module type:', typeof pdfParseModule);
-      console.error('Module keys:', Object.keys(pdfParseModule));
-      console.error('Trying each key to find callable function...');
-      
-      // Last resort: try to find any callable function in the module
-      for (const key of Object.keys(pdfParseModule)) {
-        if (typeof pdfParseModule[key] === 'function' && key !== 'constructor') {
-          console.log(`Trying key: ${key}`);
-          parseFn = pdfParseModule[key];
-          break;
-        }
-      }
-    }
-    
-    if (!parseFn) {
-      console.error('No callable function found in pdf-parse module');
+    if (!PDFParseClass) {
+      console.error('PDFParse class not found in module');
       return '';
     }
     
     // Convert Buffer to Uint8Array
     const uint8Array = new Uint8Array(buffer);
     
-    // Call the parse function
-    const data = await parseFn(uint8Array);
-    return data.text || '';
+    // Instantiate the PDFParse class and call parse
+    const parser = new PDFParseClass(uint8Array);
+    const result = await parser.parse();
+    
+    // Extract text from result
+    if (result && result.text) {
+      return result.text;
+    }
+    
+    // Try alternative result structures
+    if (typeof result === 'string') {
+      return result;
+    }
+    
+    console.warn('PDF parse result has no text property');
+    return '';
   } catch (error) {
     console.error('PDF parsing error:', error);
     return '';

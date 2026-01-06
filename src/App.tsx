@@ -385,8 +385,10 @@ function App() {
             {tasks
                 .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
                 .map((t, idx) => {
-                    // Use Math.random to ensure absolutely unique keys even for duplicate tasks
-                    const uniqueKey = `${t.externalId || t.id}-${t.createdAt}-${idx}-${Math.random().toString(36).substring(7)}`;
+                    // Create a stable hash from task properties for truly unique keys
+                    const keyData = `${t.externalId || t.id}-${t.title}-${t.createdAt}-${idx}`;
+                    const hash = keyData.split('').reduce((acc, char) => ((acc << 5) - acc) + char.charCodeAt(0), 0);
+                    const uniqueKey = `task-${Math.abs(hash)}`;
                     return (
                         <div key={uniqueKey} className="relative">
                             <TaskCard task={t} onPromote={handleAiPromote} onArchive={handleArchive} />
@@ -406,7 +408,9 @@ function App() {
         <div key={project} className="mb-6">
           <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 flex items-center gap-2"><Inbox size={12} /> {project}</h3>
           <div className="space-y-1">{groups[project].map((t, idx) => {
-            const uniqueKey = `${t.externalId || t.id}-${t.createdAt}-${idx}-${Math.random().toString(36).substring(7)}`;
+            const keyData = `${t.externalId || t.id}-${t.title}-${t.createdAt}-${idx}`;
+            const hash = keyData.split('').reduce((acc, char) => ((acc << 5) - acc) + char.charCodeAt(0), 0);
+            const uniqueKey = `asana-${Math.abs(hash)}`;
             return <TaskCard key={uniqueKey} task={t} onComplete={handleCompleteTask} />;
           })}</div>
         </div>
