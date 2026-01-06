@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { UnifiedTask, SlackContext, UserProfile } from "./types/unified";
 import { TaskCard } from "./components/TaskCard";
 import { UserProfileModal } from "./components/UserProfileModal"; 
