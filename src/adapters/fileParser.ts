@@ -72,6 +72,8 @@ async function parsePDF(buffer: Buffer): Promise<string> {
     // Dynamic import pdf-parse
     const pdfParseModule = await import('pdf-parse');
     console.log('📦 pdf-parse module keys:', Object.keys(pdfParseModule));
+    console.log('   default type:', typeof (pdfParseModule as any).default);
+    console.log('   PDFParse type:', typeof (pdfParseModule as any).PDFParse);
     
     // Configure GlobalWorkerOptions for pdf.js (used internally by pdf-parse)
     const pdfjsLib = (pdfParseModule as any).pdfjsLib || (globalThis as any).pdfjsLib;
@@ -80,47 +82,63 @@ async function parsePDF(buffer: Buffer): Promise<string> {
       console.log('✅ Configured PDF.js worker');
     }
     
-    // Try multiple ways to call pdf-parse
+    // The pdf-parse library exports a PDFParse class that needs to be instantiated
+    // and then its parse() method called
     let result: any;
     
-    // Method 1: Direct function call (most common)
-    if (typeof (pdfParseModule as any).default === 'function') {
-      console.log('🔧 Trying method 1: default function');
-      result = await (pdfParseModule as any).default(buffer);
-    }
-    // Method 2: PDFParse class
-    else if ((pdfParseModule as any).PDFParse) {
-      console.log('🔧 Trying method 2: PDFParse class');
+    if ((pdfParseModule as any).PDFParse) {
+      console.log('🔧 Using PDFParse class');
       const PDFParseClass = (pdfParseModule as any).PDFParse;
       const parser = new PDFParseClass(buffer);
-      result = parser instanceof Promise ? await parser : parser;
-    }
-    // Method 3: Named export
-    else if (typeof pdfParseModule === 'function') {
-      console.log('🔧 Trying method 3: module as function');
-      result = await pdfParseModule(buffer);
-    }
-    else {
+      
+      console.log('   Parser created, keys:', Object.keys(parser).slice(0, 10).join(', '));
+      console.log('   Has parse method:', typeof parser.parse);
+      
+      // Call the parse method if it exists
+      if (typeof parser.parse === 'function') {
+        console.log('   Calling parser.parse()...');
+        result = await parser.parse();
+      } else {
+        // Maybe the constructor itself returns the result
+        result = parser;
+      }
+    } else if (typeof (pdfParseModule as any).default === 'function') {
+      console.log('🔧 Using default export as function');
+      result = await (pdfParseModule as any).default(buffer);
+    } else {
       console.error('❌ Could not determine how to call pdf-parse');
-      console.log('   Available methods:', Object.keys(pdfParseModule));
+      console.log('   Module structure:', JSON.stringify(Object.keys(pdfParseModule)));
       return '';
     }
     
     console.log('📊 Parse result type:', typeof result);
-    console.log('   Result keys:', result ? Object.keys(result).slice(0, 10).join(', ') : 'null');
+    console.log('   Result keys:', result ? Object.keys(result).slice(0, 15).join(', ') : 'null');
     
-    // Extract text from result
+    // Extract text from result - try multiple possible locations
     if (result && typeof result.text === 'string') {
       console.log(`✅ PDF parsed successfully: ${result.text.length} characters`);
       console.log(`   First 200 chars: ${result.text.substring(0, 200)}`);
       return result.text;
     }
     
+    // Maybe text is nested
+    if (result && result.data && typeof result.data.text === 'string') {
+      console.log(`✅ PDF text found in result.data.text: ${result.data.text.length} characters`);
+      return result.data.text;
+    }
+    
+    // Check if there's a getText method
+    if (result && typeof result.getText === 'function') {
+      const text = await result.getText();
+      console.log(`✅ PDF text from getText(): ${text.length} characters`);
+      return text;
+    }
+    
     console.error('⚠️ PDF result missing text property. Available keys:', result ? Object.keys(result) : 'none');
+    console.error('   Result sample:', result ? JSON.stringify(result).substring(0, 500) : 'null');
     return '';
   } catch (error) {
     console.error('❌ PDF parsing error:', error);
-    // Print detailed error info
     if (error instanceof Error) {
       console.error('   Error name:', error.name);
       console.error('   Error message:', error.message);
