@@ -8,9 +8,17 @@ async function getPdfParse() {
   if (!pdfParse) {
     try {
       const module = await import('pdf-parse');
+      console.log('📦 PDF module loaded:', Object.keys(module));
+      console.log('   module type:', typeof module);
+      console.log('   module.default type:', typeof module.default);
+      
       // Handle both default and named exports
       pdfParse = module.default || module;
-      console.log('PDF parser loaded, type:', typeof pdfParse);
+      console.log('✅ PDF parser type:', typeof pdfParse);
+      
+      if (typeof pdfParse !== 'function') {
+        console.error('❌ PDF parser is not a function! Keys:', Object.keys(pdfParse || {}));
+      }
     } catch (error) {
       console.error('Failed to load pdf-parse:', error);
     }
@@ -83,22 +91,35 @@ export async function downloadAndParseFile(
 
 async function parsePDF(buffer: Buffer): Promise<string> {
   try {
-    const pdfParseModule = await getPdfParse();
-    if (!pdfParseModule) {
-      console.error('PDF parser module not loaded');
+    const pdfParser = await getPdfParse();
+    if (!pdfParser) {
+      console.error('❌ PDF parser module not loaded');
       return '';
     }
     
-    // pdf-parse is a function, not a class - call it directly with the buffer
-    const pdfParser = typeof pdfParseModule === 'function' ? pdfParseModule : pdfParseModule.default;
-    
-    if (!pdfParser || typeof pdfParser !== 'function') {
-      console.error('PDF parser is not a function');
+    if (typeof pdfParser !== 'function') {
+      console.error('❌ PDF parser is not a function, type:', typeof pdfParser);
+      console.error('   Available keys:', Object.keys(pdfParser || {}));
+      
+      // Try to find the actual parser function in the object
+      if (pdfParser && typeof pdfParser.default === 'function') {
+        console.log('🔄 Trying pdfParser.default...');
+        const result = await pdfParser.default(buffer);
+        if (result && typeof result.text === 'string') {
+          console.log(`✅ PDF parsed successfully: ${result.text.length} characters`);
+          return result.text;
+        }
+      }
+      
       return '';
     }
+    
+    console.log('📄 Calling PDF parser on buffer of size:', buffer.length);
     
     // Call the parser function directly with the buffer
     const result = await pdfParser(buffer);
+    
+    console.log('📊 PDF parse result:', typeof result, result ? Object.keys(result) : 'null');
     
     // Extract text from result
     if (result && typeof result.text === 'string') {
@@ -106,10 +127,10 @@ async function parsePDF(buffer: Buffer): Promise<string> {
       return result.text;
     }
     
-    console.warn('PDF parse result has no text property:', result);
+    console.warn('⚠️ PDF parse result has no text property');
     return '';
   } catch (error) {
-    console.error('PDF parsing error:', error);
+    console.error('❌ PDF parsing error:', error);
     return '';
   }
 }
