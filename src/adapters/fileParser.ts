@@ -97,19 +97,22 @@ async function parsePDF(buffer: Buffer): Promise<string> {
       return '';
     }
     
-    // The module exports PDFParse - try calling it as a function
-    const PDFParse = pdfModule.PDFParse;
+    console.log('📄 Parsing PDF with buffer of size:', buffer.length);
+    console.log('   Module type:', typeof pdfModule);
+    console.log('   Module is function:', typeof pdfModule === 'function');
     
-    if (!PDFParse) {
-      console.error('❌ PDFParse not found in module');
+    // pdf-parse exports a default function, not PDFParse
+    // Try calling the module itself (which should be the default export)
+    const parseFunction = typeof pdfModule === 'function' ? pdfModule : pdfModule.default;
+    
+    if (!parseFunction || typeof parseFunction !== 'function') {
+      console.error('❌ No valid parse function found');
+      console.error('   Available keys:', Object.keys(pdfModule));
       return '';
     }
     
-    console.log('📄 Parsing PDF with buffer of size:', buffer.length);
-    console.log('   PDFParse type:', typeof PDFParse);
-    
-    // Try calling PDFParse as a function (not instantiating as class)
-    const result = await PDFParse(buffer);
+    console.log('✅ Found parse function, calling it...');
+    const result = await parseFunction(buffer);
     
     console.log('📊 PDF parse result type:', typeof result);
     console.log('   Result keys:', result ? Object.keys(result).join(', ') : 'null');
