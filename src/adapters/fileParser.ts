@@ -78,8 +78,13 @@ async function parsePDF(buffer: Buffer): Promise<string> {
     // Configure GlobalWorkerOptions for pdf.js (used internally by pdf-parse)
     const pdfjsLib = (pdfParseModule as any).pdfjsLib || (globalThis as any).pdfjsLib;
     if (pdfjsLib && pdfjsLib.GlobalWorkerOptions) {
-      // Use version 5.4.296 to match the API version
-      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/5.4.296/pdf.worker.min.mjs';
+      // Use version 5.4.296 to match the API version - try multiple CDN URLs
+      const workerUrls = [
+        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/5.4.296/pdf.worker.min.js',
+        'https://unpkg.com/pdfjs-dist@5.4.296/build/pdf.worker.min.js',
+        'https://cdn.jsdelivr.net/npm/pdfjs-dist@5.4.296/build/pdf.worker.min.js'
+      ];
+      pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrls[0];
       console.log('✅ Configured PDF.js worker v5.4.296');
     }
     
