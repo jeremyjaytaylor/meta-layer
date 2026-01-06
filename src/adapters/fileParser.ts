@@ -36,6 +36,9 @@ export async function downloadAndParseFile(
 
     if (!response.ok) {
       console.error(`Failed to download file: ${response.status}`);
+      if (response.status === 401) {
+        console.error('❌ 401 Unauthorized: Check VITE_SLACK_TOKEN is valid and has file access permissions');
+      }
       return null;
     }
 

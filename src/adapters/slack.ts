@@ -11,6 +11,10 @@ if (!SLACK_TOKEN) {
   throw new Error("VITE_SLACK_TOKEN environment variable is not set. Please configure it in your .env file.");
 }
 
+if (!SLACK_TOKEN.startsWith('xoxb-') && !SLACK_TOKEN.startsWith('xoxp-')) {
+  console.warn("⚠️ SLACK_TOKEN format may be incorrect. Expected 'xoxb-' or 'xoxp-' prefix.");
+}
+
 // --- 1. CLEANING & EXTRACTION UTILITIES ---
 
 function cleanSlackText(text: string, context?: SlackContext): string {

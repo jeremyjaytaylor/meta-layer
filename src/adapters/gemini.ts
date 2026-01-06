@@ -29,7 +29,10 @@ async function discoverModels(): Promise<string[]> {
     if (!resp.ok) throw new Error(`list models failed: ${resp.status}`);
     const data = await resp.json() as any;
     const names: string[] = Array.isArray(data.models)
-      ? data.models.map((m: any) => m.name).filter((n: string) => typeof n === "string")
+      ? data.models
+          .map((m: any) => m.name)
+          .filter((n: string) => typeof n === "string")
+          .map((n: string) => n.replace(/^models\//, "")) // Strip 'models/' prefix
       : [];
 
     // Heuristic order: prefer 1.5 flash, then 1.5 pro, then any others
