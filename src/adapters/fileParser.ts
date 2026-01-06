@@ -91,35 +91,29 @@ export async function downloadAndParseFile(
 
 async function parsePDF(buffer: Buffer): Promise<string> {
   try {
-    const pdfParser = await getPdfParse();
-    if (!pdfParser) {
+    const pdfModule = await getPdfParse();
+    if (!pdfModule) {
       console.error('❌ PDF parser module not loaded');
       return '';
     }
     
-    if (typeof pdfParser !== 'function') {
-      console.error('❌ PDF parser is not a function, type:', typeof pdfParser);
-      console.error('   Available keys:', Object.keys(pdfParser || {}));
-      
-      // Try to find the actual parser function in the object
-      if (pdfParser && typeof pdfParser.default === 'function') {
-        console.log('🔄 Trying pdfParser.default...');
-        const result = await pdfParser.default(buffer);
-        if (result && typeof result.text === 'string') {
-          console.log(`✅ PDF parsed successfully: ${result.text.length} characters`);
-          return result.text;
-        }
-      }
-      
+    // The module exports PDFParse as a named export
+    const PDFParseClass = pdfModule.PDFParse;
+    
+    if (!PDFParseClass) {
+      console.error('❌ PDFParse class not found in module');
       return '';
     }
     
-    console.log('📄 Calling PDF parser on buffer of size:', buffer.length);
+    console.log('📄 Parsing PDF with buffer of size:', buffer.length);
     
-    // Call the parser function directly with the buffer
-    const result = await pdfParser(buffer);
+    // Instantiate the PDFParse class with the buffer
+    const parser = new PDFParseClass(buffer);
     
-    console.log('📊 PDF parse result:', typeof result, result ? Object.keys(result) : 'null');
+    // Call the parse method
+    const result = await parser.parse();
+    
+    console.log('📊 PDF parse result type:', typeof result);
     
     // Extract text from result
     if (result && typeof result.text === 'string') {
@@ -127,7 +121,13 @@ async function parsePDF(buffer: Buffer): Promise<string> {
       return result.text;
     }
     
-    console.warn('⚠️ PDF parse result has no text property');
+    // Check if result itself is the text
+    if (typeof result === 'string') {
+      console.log(`✅ PDF parsed successfully: ${result.length} characters`);
+      return result;
+    }
+    
+    console.warn('⚠️ PDF parse result has no text property:', result ? Object.keys(result) : 'null');
     return '';
   } catch (error) {
     console.error('❌ PDF parsing error:', error);
