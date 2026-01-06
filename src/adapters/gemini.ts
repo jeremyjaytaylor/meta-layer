@@ -28,14 +28,23 @@ const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 // FIX: Extract Email/File Content for AI
 function minifySignals(signals: any[]): any[] {
   console.log(`🔄 minifySignals processing ${signals.length} signals...`);
+  console.log(`📋 First signal structure:`, JSON.stringify(signals[0], null, 2).substring(0, 500));
   
   return signals.map((s, idx) => {
     let content = s.mainMessage?.text || "";
+    
+    console.log(`🔍 Signal ${idx} mainMessage structure:`, {
+      hasFiles: !!s.mainMessage?.files,
+      filesIsArray: Array.isArray(s.mainMessage?.files),
+      filesLength: s.mainMessage?.files?.length,
+      firstFileKeys: s.mainMessage?.files?.[0] ? Object.keys(s.mainMessage.files[0]) : []
+    });
     
     // Append File Preview (Email Body, PDF, Docs, etc.)
     if (s.mainMessage?.files && Array.isArray(s.mainMessage.files) && s.mainMessage.files.length > 0) {
         const f = s.mainMessage.files[0];
         console.log(`📄 Signal ${idx}: Processing file: ${f.title || f.name}`);
+        console.log(`   File object:`, JSON.stringify(f, null, 2).substring(0, 300));
         console.log(`   Preview available: ${!!f.preview}, length: ${f.preview?.length || 0}`);
         console.log(`   Full content length from metadata: ${f.fullContentLength || 'unknown'}`);
         

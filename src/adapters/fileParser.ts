@@ -89,32 +89,24 @@ async function parsePDF(buffer: Buffer): Promise<string> {
       return '';
     }
     
-    // The module exports PDFParse as a class
-    const PDFParseClass = pdfParseModule.PDFParse;
+    // pdf-parse is a function, not a class - call it directly with the buffer
+    const pdfParser = typeof pdfParseModule === 'function' ? pdfParseModule : pdfParseModule.default;
     
-    if (!PDFParseClass) {
-      console.error('PDFParse class not found in module');
+    if (!pdfParser || typeof pdfParser !== 'function') {
+      console.error('PDF parser is not a function');
       return '';
     }
     
-    // Convert Buffer to Uint8Array
-    const uint8Array = new Uint8Array(buffer);
-    
-    // Instantiate the PDFParse class and call parse
-    const parser = new PDFParseClass(uint8Array);
-    const result = await parser.parse();
+    // Call the parser function directly with the buffer
+    const result = await pdfParser(buffer);
     
     // Extract text from result
-    if (result && result.text) {
+    if (result && typeof result.text === 'string') {
+      console.log(`✅ PDF parsed successfully: ${result.text.length} characters`);
       return result.text;
     }
     
-    // Try alternative result structures
-    if (typeof result === 'string') {
-      return result;
-    }
-    
-    console.warn('PDF parse result has no text property');
+    console.warn('PDF parse result has no text property:', result);
     return '';
   } catch (error) {
     console.error('PDF parsing error:', error);
@@ -135,14 +127,29 @@ async function parseWord(arrayBuffer: ArrayBuffer): Promise<string> {
     const isZip = bytes[0] === 0x50 && bytes[1] === 0x4B; // PK header
     
     if (!isZip) {
-      console.warn('File does not appear to be a valid Word document (missing ZIP header)');
-      return '';
+      console.warn('File does not appear to be a valid Word document (missing ZIP header), trying plain text extraction...');
+      // Try to extract as plain text
+      try {
+        const decoder = new TextDecoder('utf-8');
+        return decoder.decode(arrayBuffer);
+      } catch {
+        return '';
+      }
     }
     
     const result = await extractRawText({ arrayBuffer });
+    console.log(`✅ Word document parsed successfully: ${result.value.length} characters`);
     return result.value;
   } catch (error) {
     console.error('Word document parsing error:', error);
-    return '';
+    // Fallback to plain text if parsing fails
+    try {
+      const decoder = new TextDecoder('utf-8');
+      const text = decoder.decode(arrayBuffer);
+      console.log('📝 Extracted as plain text instead');
+      return text;
+    } catch {
+      return '';
+    }
   }
 }
