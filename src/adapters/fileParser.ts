@@ -83,11 +83,20 @@ export async function downloadAndParseFile(
 
 async function parsePDF(buffer: Buffer): Promise<string> {
   try {
-    const parse = await getPdfParse();
-    if (!parse || typeof parse !== 'function') {
-      console.error('PDF parser not loaded correctly, type:', typeof parse);
+    const module = await getPdfParse();
+    if (!module) {
+      console.error('PDF parser module not loaded');
       return '';
     }
+    
+    // The module is an object, try to find the parse function
+    const parse = typeof module === 'function' ? module : module.default;
+    
+    if (!parse || typeof parse !== 'function') {
+      console.error('PDF parser function not found, module keys:', Object.keys(module));
+      return '';
+    }
+    
     // Convert Buffer to Uint8Array for pdf-parse
     const uint8Array = new Uint8Array(buffer);
     const data = await parse(uint8Array);
@@ -100,6 +109,21 @@ async function parsePDF(buffer: Buffer): Promise<string> {
 
 async function parseWord(arrayBuffer: ArrayBuffer): Promise<string> {
   try {
+    // Validate the arrayBuffer
+    if (!arrayBuffer || arrayBuffer.byteLength === 0) {
+      console.error('Invalid or empty ArrayBuffer for Word document');
+      return '';
+    }
+    
+    // Check if it looks like a ZIP file (Word docs are ZIP archives)
+    const bytes = new Uint8Array(arrayBuffer);
+    const isZip = bytes[0] === 0x50 && bytes[1] === 0x4B; // PK header
+    
+    if (!isZip) {
+      console.warn('File does not appear to be a valid Word document (missing ZIP header)');
+      return '';
+    }
+    
     const result = await extractRawText({ arrayBuffer });
     return result.value;
   } catch (error) {
