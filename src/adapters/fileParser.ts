@@ -68,77 +68,36 @@ export async function downloadAndParseFile(
 async function parsePDF(buffer: Buffer): Promise<string> {
   try {
     console.log('📄 Parsing PDF with buffer of size:', buffer.length);
-    
-    // Dynamic import pdf-parse
-    const pdfParseModule = await import('pdf-parse');
-    console.log('📦 pdf-parse module keys:', Object.keys(pdfParseModule));
-    console.log('   default type:', typeof (pdfParseModule as any).default);
-    console.log('   PDFParse type:', typeof (pdfParseModule as any).PDFParse);
-    
-    // Configure GlobalWorkerOptions for pdf.js (used internally by pdf-parse)
-    const pdfjsLib = (pdfParseModule as any).pdfjsLib || (globalThis as any).pdfjsLib;
-    if (pdfjsLib && pdfjsLib.GlobalWorkerOptions) {
-      // Use version 5.4.296 to match the API version; prefer jsdelivr ESM build
-      const workerUrl = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@5.4.296/build/pdf.worker.min.mjs';
-      pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
-      console.log('✅ Configured PDF.js worker v5.4.296 from jsdelivr');
+
+    // Parse directly with pdfjs-dist, disable worker to avoid network fetches
+    const pdfjsLib = await import('pdfjs-dist');
+    if (pdfjsLib && (pdfjsLib as any).GlobalWorkerOptions) {
+      (pdfjsLib as any).GlobalWorkerOptions.workerSrc = null;
+      console.log('✅ Disabled PDF.js worker (using main thread)');
     }
-    
-    // The pdf-parse library exports a PDFParse class that needs to be instantiated
-    // and then its parse() method called
-    let result: any;
-    
-    if ((pdfParseModule as any).PDFParse) {
-      console.log('🔧 Using PDFParse class');
-      const PDFParseClass = (pdfParseModule as any).PDFParse;
-      const parser = new PDFParseClass(buffer);
-      
-      console.log('   Parser created, keys:', Object.keys(parser).slice(0, 10).join(', '));
-      console.log('   Has parse method:', typeof parser.parse);
-      
-      // Call the parse method if it exists
-      if (typeof parser.parse === 'function') {
-        console.log('   Calling parser.parse()...');
-        result = await parser.parse();
-      } else {
-        // Maybe the constructor itself returns the result
-        result = parser;
-      }
-    } else if (typeof (pdfParseModule as any).default === 'function') {
-      console.log('🔧 Using default export as function');
-      result = await (pdfParseModule as any).default(buffer);
-    } else {
-      console.error('❌ Could not determine how to call pdf-parse');
-      console.log('   Module structure:', JSON.stringify(Object.keys(pdfParseModule)));
-      return '';
+
+    const loadingTask = (pdfjsLib as any).getDocument({
+      data: buffer,
+      disableWorker: true,
+      isEvalSupported: false
+    });
+
+    const doc = await loadingTask.promise;
+    const maxPages = doc.numPages;
+    let fullText = '';
+
+    for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
+      const page = await doc.getPage(pageNum);
+      const content = await page.getTextContent();
+      const strings = content.items
+        .map((item: any) => item.str)
+        .filter((s: string) => typeof s === 'string');
+      fullText += strings.join(' ') + '\n\n';
     }
-    
-    console.log('📊 Parse result type:', typeof result);
-    console.log('   Result keys:', result ? Object.keys(result).slice(0, 15).join(', ') : 'null');
-    
-    // Extract text from result - try multiple possible locations
-    if (result && typeof result.text === 'string') {
-      console.log(`✅ PDF parsed successfully: ${result.text.length} characters`);
-      console.log(`   First 200 chars: ${result.text.substring(0, 200)}`);
-      return result.text;
-    }
-    
-    // Maybe text is nested
-    if (result && result.data && typeof result.data.text === 'string') {
-      console.log(`✅ PDF text found in result.data.text: ${result.data.text.length} characters`);
-      return result.data.text;
-    }
-    
-    // Check if there's a getText method
-    if (result && typeof result.getText === 'function') {
-      const text = await result.getText();
-      console.log(`✅ PDF text from getText(): ${text.length} characters`);
-      return text;
-    }
-    
-    console.error('⚠️ PDF result missing text property. Available keys:', result ? Object.keys(result) : 'none');
-    console.error('   Result sample:', result ? JSON.stringify(result).substring(0, 500) : 'null');
-    return '';
+
+    console.log(`✅ PDF parsed successfully: ${fullText.length} characters`);
+    console.log(`   First 200 chars: ${fullText.substring(0, 200)}`);
+    return fullText;
   } catch (error) {
     console.error('❌ PDF parsing error:', error);
     if (error instanceof Error) {
@@ -157,22 +116,27 @@ async function parseWord(arrayBuffer: ArrayBuffer): Promise<string> {
       console.error('Invalid or empty ArrayBuffer for Word document');
       return '';
     }
-    
+
     // Check if it looks like a ZIP file (Word docs are ZIP archives)
     const bytes = new Uint8Array(arrayBuffer);
     const isZip = bytes[0] === 0x50 && bytes[1] === 0x4B; // PK header
-    
+
     if (!isZip) {
       console.warn('File does not appear to be a valid Word document (missing ZIP header), trying plain text extraction...');
       // Try to extract as plain text
       try {
         const decoder = new TextDecoder('utf-8');
-        return decoder.decode(arrayBuffer);
+        const text = decoder.decode(arrayBuffer).trim();
+        if (text.length > 0) {
+          console.log(`📝 Extracted plain text fallback: ${text.length} characters`);
+          return text;
+        }
       } catch {
-        return '';
+        /* ignore */
       }
+      return '';
     }
-    
+
     const result = await extractRawText({ arrayBuffer });
     console.log(`✅ Word document parsed successfully: ${result.value.length} characters`);
     return result.value;
@@ -181,9 +145,12 @@ async function parseWord(arrayBuffer: ArrayBuffer): Promise<string> {
     // Fallback to plain text if parsing fails
     try {
       const decoder = new TextDecoder('utf-8');
-      const text = decoder.decode(arrayBuffer);
-      console.log('📝 Extracted as plain text instead');
-      return text;
+      const text = decoder.decode(arrayBuffer).trim();
+      if (text.length > 0) {
+        console.log('📝 Extracted as plain text instead');
+        return text;
+      }
+      return '';
     } catch {
       return '';
     }
