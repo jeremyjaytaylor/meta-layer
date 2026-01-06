@@ -80,6 +80,15 @@ async function parsePDF(buffer: Buffer): Promise<string> {
       return '';
     }
     
+    // Configure GlobalWorkerOptions for pdf.js (used internally by pdf-parse)
+    // This is required for the PDF parser to work
+    const pdfjsLib = (pdfParseModule as any).pdfjsLib || (globalThis as any).pdfjsLib;
+    if (pdfjsLib && pdfjsLib.GlobalWorkerOptions) {
+      // Use a CDN version of the worker
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      console.log('✅ Configured PDF.js worker');
+    }
+    
     console.log('✅ Found PDFParse class, instantiating...');
     
     // Instantiate the class with the buffer - the constructor might return a promise
