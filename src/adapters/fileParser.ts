@@ -1,30 +1,7 @@
 import { fetch } from '@tauri-apps/plugin-http';
 import { extractRawText } from 'mammoth';
 import { Buffer } from 'buffer';
-
-// Dynamic import for pdf-parse to avoid ESM/CJS issues
-let pdfParse: any = null;
-async function getPdfParse() {
-  if (!pdfParse) {
-    try {
-      const module = await import('pdf-parse');
-      console.log('📦 PDF module loaded:', Object.keys(module));
-      console.log('   module type:', typeof module);
-      console.log('   module.default type:', typeof module.default);
-      
-      // Handle both default and named exports
-      pdfParse = module.default || module;
-      console.log('✅ PDF parser type:', typeof pdfParse);
-      
-      if (typeof pdfParse !== 'function') {
-        console.error('❌ PDF parser is not a function! Keys:', Object.keys(pdfParse || {}));
-      }
-    } catch (error) {
-      console.error('Failed to load pdf-parse:', error);
-    }
-  }
-  return pdfParse;
-}
+import pdfParse from 'pdf-parse';
 
 // Rate limiting to avoid 429 errors
 let lastDownloadTime = 0;
@@ -91,28 +68,16 @@ export async function downloadAndParseFile(
 
 async function parsePDF(buffer: Buffer): Promise<string> {
   try {
-    const pdfModule = await getPdfParse();
-    if (!pdfModule) {
-      console.error('❌ PDF parser module not loaded');
-      return '';
-    }
-    
     console.log('📄 Parsing PDF with buffer of size:', buffer.length);
-    console.log('   Module type:', typeof pdfModule);
-    console.log('   Module is function:', typeof pdfModule === 'function');
+    console.log('   pdfParse type:', typeof pdfParse);
     
-    // pdf-parse exports a default function, not PDFParse
-    // Try calling the module itself (which should be the default export)
-    const parseFunction = typeof pdfModule === 'function' ? pdfModule : pdfModule.default;
-    
-    if (!parseFunction || typeof parseFunction !== 'function') {
-      console.error('❌ No valid parse function found');
-      console.error('   Available keys:', Object.keys(pdfModule));
+    if (typeof pdfParse !== 'function') {
+      console.error('❌ pdfParse is not a function, type:', typeof pdfParse);
       return '';
     }
     
-    console.log('✅ Found parse function, calling it...');
-    const result = await parseFunction(buffer);
+    // Call pdf-parse with the buffer
+    const result = await pdfParse(buffer);
     
     console.log('📊 PDF parse result type:', typeof result);
     console.log('   Result keys:', result ? Object.keys(result).join(', ') : 'null');
@@ -121,12 +86,6 @@ async function parsePDF(buffer: Buffer): Promise<string> {
     if (result && typeof result.text === 'string') {
       console.log(`✅ PDF parsed successfully: ${result.text.length} characters`);
       return result.text;
-    }
-    
-    // Check if result itself is the text
-    if (typeof result === 'string') {
-      console.log(`✅ PDF parsed successfully: ${result.length} characters`);
-      return result;
     }
     
     console.warn('⚠️ PDF parse result has unexpected structure');
