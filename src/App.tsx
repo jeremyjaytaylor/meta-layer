@@ -384,12 +384,16 @@ function App() {
         <div className="space-y-1">
             {tasks
                 .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-                .map((t, idx) => (
-                    <div key={`${t.externalId || t.id}-${t.createdAt}-${idx}`} className="relative">
-                        <TaskCard task={t} onPromote={handleAiPromote} onArchive={handleArchive} />
-                        {analyzingId === t.id && <div className="absolute inset-0 bg-white/90 flex items-center justify-center rounded-lg z-10 backdrop-blur-sm"><Sparkles size={20} className="text-purple-700 animate-pulse" /></div>}
-                    </div>
-                ))
+                .map((t, idx) => {
+                    // Use Math.random to ensure absolutely unique keys even for duplicate tasks
+                    const uniqueKey = `${t.externalId || t.id}-${t.createdAt}-${idx}-${Math.random().toString(36).substring(7)}`;
+                    return (
+                        <div key={uniqueKey} className="relative">
+                            <TaskCard task={t} onPromote={handleAiPromote} onArchive={handleArchive} />
+                            {analyzingId === t.id && <div className="absolute inset-0 bg-white/90 flex items-center justify-center rounded-lg z-10 backdrop-blur-sm"><Sparkles size={20} className="text-purple-700 animate-pulse" /></div>}
+                        </div>
+                    );
+                })
             }
         </div>
       );
@@ -401,7 +405,10 @@ function App() {
       return Object.keys(groups).sort().map(project => (
         <div key={project} className="mb-6">
           <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 flex items-center gap-2"><Inbox size={12} /> {project}</h3>
-          <div className="space-y-1">{groups[project].map((t, idx) => <TaskCard key={`${t.externalId || t.id}-${t.createdAt}-${idx}`} task={t} onComplete={handleCompleteTask} />)}</div>
+          <div className="space-y-1">{groups[project].map((t, idx) => {
+            const uniqueKey = `${t.externalId || t.id}-${t.createdAt}-${idx}-${Math.random().toString(36).substring(7)}`;
+            return <TaskCard key={uniqueKey} task={t} onComplete={handleCompleteTask} />;
+          })}</div>
         </div>
       ));
   };

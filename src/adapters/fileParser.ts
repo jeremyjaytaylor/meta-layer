@@ -83,28 +83,10 @@ export async function downloadAndParseFile(
 
 async function parsePDF(buffer: Buffer): Promise<string> {
   try {
-    const module = await getPdfParse();
-    if (!module) {
-      console.error('PDF parser module not loaded');
-      return '';
-    }
-    
-    // The module has a PDFParse class that needs to be instantiated
-    const PDFParseClass = module.PDFParse;
-    
-    if (!PDFParseClass) {
-      console.error('PDFParse class not found in module');
-      console.error('Available keys:', Object.keys(module));
-      return '';
-    }
-    
-    // Convert Buffer to Uint8Array for pdf-parse
-    const uint8Array = new Uint8Array(buffer);
-    
-    // Instantiate and parse
-    const parser = new PDFParseClass(uint8Array);
-    const data = await parser.parse();
-    return data.text || '';
+    // PDF parsing disabled due to browser compatibility issues with pdf-parse library
+    // The library's API is not compatible with browser environments
+    console.warn('PDF parsing currently disabled - browser compatibility issues');
+    return '';
   } catch (error) {
     console.error('PDF parsing error:', error);
     return '';
