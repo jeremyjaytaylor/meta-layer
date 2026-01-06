@@ -9,18 +9,21 @@ if (!API_KEY) {
   throw new Error("VITE_GEMINI_API_KEY environment variable is not set. Please configure it in your .env file.");
 }
 
-const genAI = new GoogleGenerativeAI(API_KEY);
+// Use GAIA v1 endpoints so the latest 1.5 models resolve instead of 404-ing on v1beta
+const genAI = new GoogleGenerativeAI(API_KEY, { apiVersion: "v1" });
 
 export interface ParsedMessage { msgId: string; suggestedProject: string; }
 export interface ProposedTask { title: string; description: string; project: string; subtasks: string[]; citations: string[]; sourceLinks: { text: string; url: string; }[]; }
 export interface AiSuggestion { title: string; projectName: string; reasoning: string; }
 
-// STRATEGY: Stable Cascade - Only use valid, existing models
+// STRATEGY: Stable Cascade - only use GAIA v1-available model IDs
+// Keep fastest first; include 1.0 fallback for older API keys/quotas.
 const MODEL_CASCADE = [
-  "gemini-1.5-pro-latest",
-  "gemini-1.5-flash-latest",
-  "gemini-1.5-pro",
+  "gemini-1.5-flash-002",
+  "gemini-1.5-pro-002",
   "gemini-1.5-flash",
+  "gemini-1.5-pro",
+  "gemini-1.0-pro",
 ];
 
 // BUDGETS: stay well under the 1M token cap
@@ -158,17 +161,32 @@ Content: ${truncated}
 
 Output only the summary text, no JSON.`;
 
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
-    const result = await model.generateContent(prompt);
-    const summary = result.response.text().trim();
-    
-    // Ensure it's not too long
-    return summary.length > 150 ? summary.substring(0, 147) + '...' : summary;
+    // Try fast model first, then fallback through cascade if it 404s
+    const summaryModels = ["gemini-1.5-flash-002", "gemini-1.5-flash", "gemini-1.0-pro"];
+    let lastErr: any;
+    for (const m of summaryModels) {
+      try {
+        const model = genAI.getGenerativeModel({ model: m });
+        const result = await model.generateContent(prompt);
+        const summary = result.response.text().trim();
+        const clipped = summary.length > 150 ? summary.substring(0, 147) + "..." : summary;
+        return clipped;
+      } catch (err: any) {
+        lastErr = err;
+        const msg = err?.message || "";
+        console.warn(`Summary model ${m} failed (${msg}). Trying next...`);
+        if (msg.includes("404")) continue;
+        // Non-404 errors: break to fallback
+        break;
+      }
+    }
+
+    throw lastErr || new Error("All summary models failed");
   } catch (error) {
-    console.error('Failed to generate summary:', error);
+    console.error("Failed to generate summary:", error);
     // Fallback to first sentence of content
     const firstSentence = fileContent.split(/[.!?]\s/)[0];
-    return firstSentence.length > 150 ? firstSentence.substring(0, 147) + '...' : firstSentence;
+    return firstSentence.length > 150 ? firstSentence.substring(0, 147) + "..." : firstSentence;
   }
 }
 
